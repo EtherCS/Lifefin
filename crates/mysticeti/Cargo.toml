@@ -10,6 +10,7 @@ color-eyre = { workspace = true }
 eyre = { workspace = true }
 futures = { workspace = true }
 mysticeti-core = { path = "../mysticeti-core" }
+acs = {path = "../acs"}
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }

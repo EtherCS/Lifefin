@@ -201,6 +201,8 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         inner.syncer.authority_connection(id, true).await;
 
         let peer = format_authority_index(id);
+        // Ether: handle messages here
+        // Ether todo: handle PoST messages
         while let Some(message) = inner.recv_or_stopped(&mut connection.receiver).await {
             match message {
                 NetworkMessage::SubscribeOwnFrom(round) => {

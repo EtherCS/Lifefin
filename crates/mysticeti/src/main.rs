@@ -17,6 +17,7 @@ use mysticeti_core::{
     validator::Validator,
 };
 use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
+use acs::adversary::{AttackType, AttackTypeIndex};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -67,6 +68,18 @@ enum Operation {
         #[clap(long, value_name = "INT")]
         committee_size: usize,
     },
+    /// Deploy a local validator for attack test. DryAttackrun mode uses default keys and committee configurations.
+    DryAttackRun {
+        /// The attacking type
+        #[clap(long, value_name = "INT")]
+        attack_type: AttackTypeIndex,
+        /// The authority index of this node.
+        #[clap(long, value_name = "INT")]
+        authority: AuthorityIndex,
+        /// The number of authorities in the committee.
+        #[clap(long, value_name = "INT")]
+        committee_size: usize,
+    },
 }
 
 #[tokio::main]
@@ -105,6 +118,11 @@ async fn main() -> Result<()> {
             authority,
             committee_size,
         } => dryrun(authority, committee_size).await?,
+        Operation::DryAttackRun {
+            attack_type,
+            authority,
+            committee_size,
+        } => dryattackrun(attack_type, authority, committee_size).await?,
     }
 
     Ok(())
@@ -229,6 +247,63 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryrun-validator-{authority}"));
+    let mut all_private_config =
+        NodePrivateConfig::new_for_benchmarks(&working_dir, committee_size);
+    let private_config = all_private_config.remove(authority as usize);
+    match fs::remove_dir_all(&working_dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).wrap_err(format!(
+                "Failed to remove directory '{}'",
+                working_dir.display()
+            ))
+        }
+    }
+    match fs::create_dir_all(&private_config.storage_path) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(e).wrap_err(format!(
+                "Failed to create directory '{}'",
+                working_dir.display()
+            ))
+        }
+    }
+
+    let validator = Validator::start(
+        authority,
+        committee,
+        public_config,
+        private_config,
+        client_parameters,
+    )
+    .await?;
+    let (network_result, _metrics_result) = validator.await_completion().await;
+    network_result.expect("Validator crashed");
+
+    Ok(())
+}
+
+async fn dryattackrun(attack_type_index: AttackTypeIndex, authority: AuthorityIndex, committee_size: usize) -> Result<()> {
+    if let Some(attack_type) = AttackType::from_index(attack_type_index) {
+        tracing::warn!(
+            "Starting validator {authority} in dryattackrun mode (committee size: {committee_size}), attack type: {}", attack_type.name()
+        );
+    } else {
+        tracing::warn!(
+            "Must specify a node type"
+        );
+    }
+    // tracing::warn!(
+    //     "Starting validator {authority} in dryattackrun mode (committee size: {committee_size}), attack type: {attack_type:?}"
+    // );
+    let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
+    let committee = Committee::new_for_benchmarks(committee_size);
+    let client_parameters = ClientParameters::default();
+    let node_parameters = NodeParameters::default();
+    let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
+
+    let working_dir = PathBuf::from(format!("dryattackrun-validator-{authority}"));
     let mut all_private_config =
         NodePrivateConfig::new_for_benchmarks(&working_dir, committee_size);
     let private_config = all_private_config.remove(authority as usize);
