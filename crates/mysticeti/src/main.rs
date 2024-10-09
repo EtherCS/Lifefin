@@ -302,7 +302,7 @@ async fn dryattackrun(
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default();
-    let node_parameters = NodeParameters::default().with_attack_type(attack_type);
+    let node_parameters = NodeParameters::default().with_number_of_leaders(1).with_attack_type(attack_type);
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryattackrun-validator-{authority}"));
