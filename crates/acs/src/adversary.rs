@@ -1,11 +1,13 @@
+use serde::{Deserialize, Serialize};
+
 pub type AttackTypeIndex = u64;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize, Copy)]
 pub enum AttackType {
-    Honest = 0, // behave honestly
-    Inflation = 1,  // create blocks without voting for leader blocks
-    Crash = 2,  // don't create blocks
-    Byzantine = 3,  // create equivocated blocks
+    Honest = 0,    // behave honestly
+    Inflation = 1, // create blocks without voting for leader blocks
+    Crash = 2,     // don't create blocks
+    Byzantine = 3, // create equivocated blocks
 }
 
 impl AttackType {

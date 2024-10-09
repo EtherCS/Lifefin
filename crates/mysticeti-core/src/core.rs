@@ -9,6 +9,8 @@ use std::{
 
 use minibytes::Bytes;
 
+use acs::adversary::AttackType;
+
 use crate::{
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -57,6 +59,7 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
+    attack_type: AttackType,    // note that this is only used for testing
 }
 
 pub struct CoreOptions {
@@ -135,6 +138,7 @@ impl<H: BlockHandler> Core<H> {
                 .with_number_of_leaders(public_config.parameters.number_of_leaders)
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
+        let attack_type = public_config.parameters.attack_type;
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -142,6 +146,10 @@ impl<H: BlockHandler> Core<H> {
         tracing::info!(
             "Number of leaders: {}",
             public_config.parameters.number_of_leaders
+        );
+        tracing::info!(
+            "Attack type: {}",
+            attack_type.name()
         );
 
         let mut this = Self {
@@ -162,6 +170,7 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
+            attack_type,
         };
 
         if !unprocessed_blocks.is_empty() {

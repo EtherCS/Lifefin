@@ -16,6 +16,8 @@ use crate::{
     types::{AuthorityIndex, PublicKey, RoundNumber},
 };
 
+use acs::adversary::AttackType;
+
 pub trait ImportExport: Serialize + DeserializeOwned {
     fn load<P: AsRef<Path>>(path: P) -> Result<Self, io::Error> {
         let content = fs::read_to_string(&path)?;
@@ -51,6 +53,8 @@ pub struct NodeParameters {
     pub consensus_only: bool,
     #[serde(default = "node_defaults::default_enable_synchronizer")]
     pub enable_synchronizer: bool,
+    #[serde(default = "node_defaults::default_attack_type")]
+    pub attack_type: AttackType,
 }
 
 pub mod node_defaults {
@@ -89,6 +93,10 @@ pub mod node_defaults {
     pub fn default_enable_synchronizer() -> bool {
         false
     }
+
+    pub fn default_attack_type() -> acs::adversary::AttackType {
+        acs::adversary::AttackType::Honest
+    }
 }
 
 impl Default for NodeParameters {
@@ -103,11 +111,19 @@ impl Default for NodeParameters {
             enable_pipelining: node_defaults::default_enable_pipelining(),
             consensus_only: node_defaults::default_consensus_only(),
             enable_synchronizer: node_defaults::default_enable_synchronizer(),
+            attack_type: node_defaults::default_attack_type(),
         }
     }
 }
 
 impl ImportExport for NodeParameters {}
+
+impl NodeParameters {
+    pub fn with_attack_type(mut self, attack_type: AttackType) -> Self {
+        self.attack_type = attack_type;
+        self
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NodeIdentifier {

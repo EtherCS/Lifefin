@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 
+use acs::adversary::{AttackType, AttackTypeIndex};
 use clap::{command, Parser};
 use eyre::{eyre, Context, Result};
 use mysticeti_core::{
@@ -17,7 +18,6 @@ use mysticeti_core::{
     validator::Validator,
 };
 use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
-use acs::adversary::{AttackType, AttackTypeIndex};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -284,23 +284,25 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
     Ok(())
 }
 
-async fn dryattackrun(attack_type_index: AttackTypeIndex, authority: AuthorityIndex, committee_size: usize) -> Result<()> {
-    if let Some(attack_type) = AttackType::from_index(attack_type_index) {
+async fn dryattackrun(
+    attack_type_index: AttackTypeIndex,
+    authority: AuthorityIndex,
+    committee_size: usize,
+) -> Result<()> {
+    let attack_type = if let Some(attack_type) = AttackType::from_index(attack_type_index) {
         tracing::warn!(
             "Starting validator {authority} in dryattackrun mode (committee size: {committee_size}), attack type: {}", attack_type.name()
         );
+        attack_type
     } else {
-        tracing::warn!(
-            "Must specify a node type"
-        );
-    }
-    // tracing::warn!(
-    //     "Starting validator {authority} in dryattackrun mode (committee size: {committee_size}), attack type: {attack_type:?}"
-    // );
+        tracing::warn!("Must specify a node type");
+        return Err(eyre!("Invalid attack type index"));
+    };
+
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default();
-    let node_parameters = NodeParameters::default();
+    let node_parameters = NodeParameters::default().with_attack_type(attack_type);
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryattackrun-validator-{authority}"));
