@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    fs,
-    io,
+    fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
@@ -119,8 +118,16 @@ impl Default for NodeParameters {
 impl ImportExport for NodeParameters {}
 
 impl NodeParameters {
+    pub fn with_number_of_leaders(mut self, number_of_leaders: usize) -> Self {
+        self.number_of_leaders = number_of_leaders;
+        self
+    }
     pub fn with_attack_type(mut self, attack_type: AttackType) -> Self {
         self.attack_type = attack_type;
+        self
+    }
+    pub fn with_leader_timeout(mut self, leader_timeout: Duration) -> Self {
+        self.leader_timeout = leader_timeout;
         self
     }
 }

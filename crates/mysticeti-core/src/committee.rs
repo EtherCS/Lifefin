@@ -21,15 +21,8 @@ use crate::{
     data::Data,
     range_map::RangeMap,
     types::{
-        AuthorityIndex,
-        AuthoritySet,
-        BaseStatement,
-        BlockReference,
-        Stake,
-        StatementBlock,
-        TransactionLocator,
-        TransactionLocatorRange,
-        Vote,
+        AuthorityIndex, AuthoritySet, BaseStatement, BlockReference, Stake, StatementBlock,
+        TransactionLocator, TransactionLocatorRange, Vote,
     },
 };
 
@@ -84,6 +77,10 @@ impl Committee {
 
     pub fn quorum_threshold(&self) -> Stake {
         self.quorum_threshold + 1
+    }
+
+    pub fn byzantine_threshold(&self) -> Stake {
+        self.len() as Stake / 3
     }
 
     pub fn get_public_key(&self, authority: AuthorityIndex) -> Option<&PublicKey> {
@@ -210,7 +207,7 @@ impl CommitteeThreshold for ValidityThreshold {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StakeAggregator<TH> {
     votes: AuthoritySet,
-    stake: Stake,
+    pub stake: Stake,
     _phantom: PhantomData<TH>,
 }
 
@@ -271,6 +268,16 @@ impl<TH: CommitteeThreshold> StakeAggregator<TH> {
             self.stake += stake;
         }
         TH::is_threshold(committee, self.stake)
+    }
+
+    // Inflation attack: need 2f+2 blocks since we exclude the leader block
+    pub fn inflation_add(&mut self, vote: AuthorityIndex, committee: &Committee) -> bool {
+        let stake = committee.get_stake(vote).expect("Authority not found");
+        if self.votes.insert(vote) {
+            self.stake += stake;
+        }
+        // todo: currently, we only consider each node has 1 stake
+        TH::is_threshold(committee, self.stake - 1)
     }
 
     pub fn clear(&mut self) {

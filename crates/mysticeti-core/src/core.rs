@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     mem,
     sync::{atomic::AtomicU64, Arc},
 };
@@ -15,12 +15,7 @@ use crate::{
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
-        BlockStore,
-        BlockWriter,
-        CommitData,
-        OwnBlockData,
-        WAL_ENTRY_COMMIT,
-        WAL_ENTRY_PAYLOAD,
+        BlockStore, BlockWriter, CommitData, OwnBlockData, WAL_ENTRY_COMMIT, WAL_ENTRY_PAYLOAD,
         WAL_ENTRY_STATE,
     },
     committee::Committee,
@@ -59,14 +54,17 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
-    attack_type: AttackType,    // note that this is only used for testing
+    attack_type: AttackType, // note that this is only used for testing
+    // todo: clean up
+    round_blocks: HashMap<RoundNumber, VecDeque<BlockReference>>, // maintain a map of round to block reference for inflation attack
 }
 
 pub struct CoreOptions {
     fsync: bool,
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum MetaStatement {
     Include(BlockReference),
     Payload(Vec<BaseStatement>),
@@ -147,10 +145,7 @@ impl<H: BlockHandler> Core<H> {
             "Number of leaders: {}",
             public_config.parameters.number_of_leaders
         );
-        tracing::info!(
-            "Attack type: {}",
-            attack_type.name()
-        );
+        tracing::info!("Attack type: {}", attack_type.name());
 
         let mut this = Self {
             block_manager,
@@ -171,6 +166,7 @@ impl<H: BlockHandler> Core<H> {
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
             attack_type,
+            round_blocks: HashMap::new(),
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -200,10 +196,15 @@ impl<H: BlockHandler> Core<H> {
             .add_blocks(blocks, &mut (&mut self.wal_writer, &self.block_store));
         let mut result = Vec::with_capacity(processed.len());
         for (position, processed) in processed.into_iter() {
+            let processed_round = processed.reference().round;
             self.threshold_clock
                 .add_block(*processed.reference(), &self.committee);
             self.pending
                 .push_back((position, MetaStatement::Include(*processed.reference())));
+            self.round_blocks
+                .entry(processed_round)
+                .or_insert_with(VecDeque::new)
+                .push_back(*processed.reference());
             result.push(processed);
         }
         self.run_block_handler(&result);
@@ -249,7 +250,7 @@ impl<H: BlockHandler> Core<H> {
                 _ => false,
             })
             .unwrap_or(self.pending.len());
-
+        let recover_pending = self.pending.clone();
         let mut taken = self.pending.split_off(first_include_index);
         // Split off returns the "tail", what we want is keep the tail in "pending" and get the head
         mem::swap(&mut taken, &mut self.pending);
@@ -281,6 +282,47 @@ impl<H: BlockHandler> Core<H> {
             }
         }
 
+        tracing::debug!("Inflation: includes has {includes:?}");
+        // Inflation: remove the leader block (except for our own blocks) here
+        match self.attack_type {
+            AttackType::Inflation => {
+                let leaders = self.committer.get_leaders(clock_round);
+                if leaders.contains(&self.authority) {
+                    self.pending = recover_pending;
+                    tracing::debug!("Inflation: not create leader block in {}", clock_round);
+                    return None;
+                }
+                let last_round_leaders = self.committer.get_leaders(clock_round - 1);
+                includes.retain(|include| {
+                    !last_round_leaders.contains(&include.authority)
+                        || include.authority == self.authority
+                });
+                // Inflation: only propose valid blocks
+                if includes.len() < self.committee.quorum_threshold() as usize {
+                    // Recover the pending with the taken
+                    self.pending = recover_pending;
+                    tracing::debug!("Inflation: not enough includes {}", includes.len());
+                    return None;
+                }
+                // Inflation: create blocks only when receiving f+2 honest blocks in the round (since need to have 2f+2 blocks with one excluded block)
+                // todo: attackers should create 'every' block to make the attack effective
+                let round_blocks_len = self
+                    .round_blocks
+                    .get(&clock_round)
+                    .unwrap_or(&VecDeque::new())
+                    .len();
+                if round_blocks_len < self.committee.byzantine_threshold() as usize + 2 {
+                    self.pending = recover_pending;
+                    tracing::debug!(
+                        "Inflation: not enough blocks {} in the round {}",
+                        round_blocks_len,
+                        clock_round
+                    );
+                    return None;
+                }
+            }
+            _ => {}
+        }
         assert!(!includes.is_empty());
         let time_ns = timestamp_utc().as_nanos();
         let block = StatementBlock::new_with_signer(
@@ -292,6 +334,11 @@ impl<H: BlockHandler> Core<H> {
             self.epoch_changing(),
             &self.signer,
         );
+        // won't create invalid block, e.g., A3(A1, B2, C2), after launching inflation attack
+        if let Err(_) = block.verify(&self.committee) {
+            self.pending = recover_pending;
+            return None;
+        }
         assert_eq!(
             block.includes().get(0).unwrap().authority,
             self.authority,
@@ -500,6 +547,10 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn epoch_closing_time(&self) -> Arc<AtomicU64> {
         self.epoch_manager.closing_time()
+    }
+
+    pub fn attack_type(&self) -> AttackType {
+        self.attack_type
     }
 }
 
