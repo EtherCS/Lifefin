@@ -55,7 +55,6 @@ pub struct Core<H: BlockHandler> {
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
     attack_type: AttackType, // note that this is only used for testing
-    // todo: clean up
     round_blocks: HashMap<RoundNumber, VecDeque<BlockReference>>, // maintain a map of round to block reference for inflation attack
 }
 
@@ -201,6 +200,10 @@ impl<H: BlockHandler> Core<H> {
                 .add_block(*processed.reference(), &self.committee);
             self.pending
                 .push_back((position, MetaStatement::Include(*processed.reference())));
+            // Maintain a round_blocks map for
+            // 1) detecting if f+2 honest blocks are received in a round
+            // 2) todo: enable attacker to create blocks in 'every' round
+            // todo: need garbage collection
             self.round_blocks
                 .entry(processed_round)
                 .or_insert_with(VecDeque::new)
@@ -282,22 +285,25 @@ impl<H: BlockHandler> Core<H> {
             }
         }
 
-        tracing::debug!("Inflation: includes has {includes:?}");
         // Inflation: remove the leader block (except for our own blocks) here
         match self.attack_type {
             AttackType::Inflation => {
+                // Find the leader block in the current round
                 let leaders = self.committer.get_leaders(clock_round);
                 if leaders.contains(&self.authority) {
+                    // If I am the leader, then I should not create a block
                     self.pending = recover_pending;
                     tracing::debug!("Inflation: not create leader block in {}", clock_round);
                     return None;
                 }
+                // Find the leader blocks in the last round
                 let last_round_leaders = self.committer.get_leaders(clock_round - 1);
+                // Disconnect all leader blocks in the last round
                 includes.retain(|include| {
                     !last_round_leaders.contains(&include.authority)
                         || include.authority == self.authority
                 });
-                // Inflation: only propose valid blocks
+                // Only propose valid blocks
                 if includes.len() < self.committee.quorum_threshold() as usize {
                     // Recover the pending with the taken
                     self.pending = recover_pending;
@@ -305,7 +311,7 @@ impl<H: BlockHandler> Core<H> {
                     return None;
                 }
                 // Inflation: create blocks only when receiving f+2 honest blocks in the round (since need to have 2f+2 blocks with one excluded block)
-                // todo: attackers should create 'every' block to make the attack effective
+                // todo: attackers should create blocks in 'every' round to make the attack effective
                 let round_blocks_len = self
                     .round_blocks
                     .get(&clock_round)
