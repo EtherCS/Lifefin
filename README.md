@@ -28,3 +28,10 @@ One solution (could be more) is to ask attackers to:
 2. create blocks in *every round*. This hasn't been implemented.
 
 By doing these, attackers can guarantee there are *f+2+f=2f+2* blocks created every round. Therefore, attackers have *2f+1* (excluding the leader block) to connect and can create blocks every round.
+
+## How to test
+Enter the ```./scripts``` directory, run:
+```bash
+bash inflationdryrun.sh
+```
+This script will recompile all files and run 12 out 13 nodes with the first 4 nodes are inflation attackers (here, *n=13, f=4*). After the script finished, you will see ```attack.v*.log.ansi``` log files in the ```./scripts``` directory. 
