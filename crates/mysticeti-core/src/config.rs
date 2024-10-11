@@ -119,6 +119,10 @@ impl Default for NodeParameters {
 impl ImportExport for NodeParameters {}
 
 impl NodeParameters {
+    pub fn with_number_of_leaders(mut self, number_of_leaders: usize) -> Self {
+        self.number_of_leaders = number_of_leaders;
+        self
+    }
     pub fn with_attack_type(mut self, attack_type: AttackType) -> Self {
         self.attack_type = attack_type;
         self

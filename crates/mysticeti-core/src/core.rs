@@ -9,8 +9,6 @@ use std::{
 
 use minibytes::Bytes;
 
-use acs::adversary::AttackType;
-
 use crate::{
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -59,7 +57,6 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
-    attack_type: AttackType,    // note that this is only used for testing
 }
 
 pub struct CoreOptions {
@@ -170,7 +167,6 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
-            attack_type,
         };
 
         if !unprocessed_blocks.is_empty() {
