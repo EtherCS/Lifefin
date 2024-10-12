@@ -13,7 +13,7 @@ use crate::{
     data::Data,
     metrics::{Metrics, UtilizationTimerVecExt},
     runtime::timestamp_utc,
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData},
 };
 
 pub struct Syncer<H: BlockHandler, S: SyncerSignals, C: CommitObserver> {
@@ -69,6 +69,14 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .utilization_timer("Syncer::add_blocks");
         self.core.add_blocks(blocks);
         self.try_new_block();
+    }
+
+    pub fn add_post_blocks(&mut self, blocks: Vec<UncertifiedPoSTBlockData>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_post_blocks");
+        self.core.add_post_blocks(blocks);
     }
 
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {

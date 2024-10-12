@@ -239,6 +239,22 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 NetworkMessage::BlockNotFound(_references) => {
                     // TODO: leverage this signal to request blocks from other peers
                 }
+                NetworkMessage::ProofOfStuckBlock(post_block) => {  
+                    // Ether: handle PoST messages
+                    // Ether todo: handle PoST messages
+                    tracing::debug!("Received post blocks {} from {}", post_block.stuck_block.reference(), peer);
+                    if let Err(e) = post_block.verify(&inner.committee) {
+                        tracing::warn!(
+                            "Rejected incorrect PoST block {} from {}: {:?}",
+                            post_block.stuck_block.reference(),
+                            peer,
+                            e
+                        );
+                        // Terminate connection upon receiving incorrect block.
+                        break;
+                    }
+                    inner.syncer.add_post_blocks(vec![post_block]).await;
+                }
             }
         }
         inner.syncer.authority_connection(id, false).await;

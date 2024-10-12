@@ -29,7 +29,7 @@ use crate::{
     metrics::{print_network_address_table, Metrics},
     runtime,
     stat::HistogramSender,
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData},
 };
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -42,6 +42,7 @@ pub enum NetworkMessage {
     RequestBlocks(Vec<BlockReference>),
     /// Indicate that a requested block is not found.
     BlockNotFound(Vec<BlockReference>),
+    ProofOfStuckBlock(UncertifiedPoSTBlockData),
 }
 
 pub struct Network {

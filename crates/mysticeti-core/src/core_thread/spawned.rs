@@ -10,7 +10,9 @@ use crate::{
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},
     syncer::{CommitObserver, Syncer, SyncerSignals},
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
+    types::{
+        AuthorityIndex, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData,
+    },
 };
 
 pub struct CoreThreadDispatcher<H: BlockHandler, S: SyncerSignals, C: CommitObserver> {
@@ -34,6 +36,7 @@ enum CoreThreadCommand {
     ConnectionEstablished(AuthorityIndex, oneshot::Sender<()>),
     /// Indicate that a connection to an authority was dropped.
     ConnectionDropped(AuthorityIndex, oneshot::Sender<()>),
+    AddPoSTBlocks(Vec<UncertifiedPoSTBlockData>, oneshot::Sender<()>),
 }
 
 impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 'static>
@@ -62,6 +65,13 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
     pub async fn add_blocks(&self, blocks: Vec<Data<StatementBlock>>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddBlocks(blocks, sender))
+            .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_post_blocks(&self, blocks: Vec<UncertifiedPoSTBlockData>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddPoSTBlocks(blocks, sender))
             .await;
         receiver.await.expect("core thread is not expected to stop");
     }
@@ -136,6 +146,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                 }
                 CoreThreadCommand::ConnectionDropped(authority, sender) => {
                     self.syncer.connected_authorities.remove(&authority);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddPoSTBlocks(post_blocks, sender) => {
+                    self.syncer.add_post_blocks(post_blocks);
                     sender.send(()).ok();
                 }
             }

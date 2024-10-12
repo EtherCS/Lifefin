@@ -34,7 +34,7 @@ use crate::{
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData},
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 
@@ -204,6 +204,15 @@ impl<H: BlockHandler> Core<H> {
         }
         self.run_block_handler(&result);
         result
+    }
+
+    pub fn add_post_blocks(&mut self, blocks: Vec<UncertifiedPoSTBlockData>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_post_blocks");
+        // todo: handle post blocks here
+        tracing::debug!("Received post blocks {:?}", blocks);
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
