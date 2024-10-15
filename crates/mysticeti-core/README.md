@@ -5,8 +5,11 @@ net_sync -> spawned -> syncer -> core
 refer to disseminator.disseminate_own_blocks
 
 ## TODO:
-1. generate PoST blocks
-2. impl sending PoST blocks interface, refer to '''disseminate_own_blocks'''
-3. impl '''verify''' function for UncertifiedPoSTBlockData
-4. impl '''add_post_blocks''' function for handling PoST blocks in core module
-5. impl ACS consensus mode after generate a PoST block
+- generate PoST blocks -> done
+- implement a signature_service for ```PoSTBlockVote```
+- handle vote of own PoST from other peers
+- update own PoST with signature
+- impl sending PoST blocks interface, refer to '''disseminate_own_blocks''' -> done
+- impl '''verify''' function for UncertifiedPoSTBlockData
+- impl '''add_post_blocks''' function for handling PoST blocks in core module  -> done
+- impl ACS consensus mode after generate a PoST block
