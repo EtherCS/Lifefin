@@ -2,6 +2,8 @@
 // under Fallback mode, node performs ACS mechanism
 
 use eyre;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConsensusMode {
     Optimistic = 0,
     Fallback = 1,
