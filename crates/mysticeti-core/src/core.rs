@@ -2,23 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     mem,
     sync::{atomic::AtomicU64, Arc},
 };
 
+use acs::acs_types::ConsensusMode;
+
 use minibytes::Bytes;
 
 use crate::{
+    acs_manager::{ACSManager, PoSTBlockVote, UncertifiedPoSTBlockData},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
-        BlockStore,
-        BlockWriter,
-        CommitData,
-        OwnBlockData,
-        WAL_ENTRY_COMMIT,
-        WAL_ENTRY_PAYLOAD,
+        BlockStore, BlockWriter, CommitData, OwnBlockData, WAL_ENTRY_COMMIT, WAL_ENTRY_PAYLOAD,
         WAL_ENTRY_STATE,
     },
     committee::Committee,
@@ -34,7 +32,7 @@ use crate::{
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData},
+    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock},
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 
@@ -57,6 +55,9 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
+    consensus_mode: ConsensusMode,
+    acs_manager: ACSManager,
+    last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
 }
 
 pub struct CoreOptions {
@@ -93,6 +94,7 @@ impl<H: BlockHandler> Core<H> {
             committed_state,
         } = recovered;
         let mut threshold_clock = ThresholdClockAggregator::new(0);
+        let mut last_seen_blocks = HashMap::new();
         let last_own_block = if let Some(own_block) = last_own_block {
             for (_, pending_block) in pending.iter() {
                 if let MetaStatement::Include(include) = pending_block {
@@ -111,10 +113,12 @@ impl<H: BlockHandler> Core<H> {
             for block in other_genesis_blocks {
                 let reference = *block.reference();
                 threshold_clock.add_block(reference, &committee);
+                last_seen_blocks.insert(block.author(), reference);
                 let position = block_writer.insert_block(block);
                 pending.push_back((position, MetaStatement::Include(reference)));
             }
             threshold_clock.add_block(*own_genesis_block.reference(), &committee);
+            last_seen_blocks.insert(authority, *own_genesis_block.reference());
             let own_block_data = OwnBlockData {
                 next_entry: WalPosition::MAX,
                 block: own_genesis_block,
@@ -136,6 +140,7 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
+        let acs_manager = ACSManager::new(0);
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -144,10 +149,7 @@ impl<H: BlockHandler> Core<H> {
             "Number of leaders: {}",
             public_config.parameters.number_of_leaders
         );
-        tracing::info!(
-            "Attack type: {}",
-            attack_type.name()
-        );
+        tracing::info!("Attack type: {}", attack_type.name());
 
         let mut this = Self {
             block_manager,
@@ -167,6 +169,9 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
+            consensus_mode: ConsensusMode::Optimistic,
+            acs_manager,
+            last_seen_blocks,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -196,6 +201,16 @@ impl<H: BlockHandler> Core<H> {
             .add_blocks(blocks, &mut (&mut self.wal_writer, &self.block_store));
         let mut result = Vec::with_capacity(processed.len());
         for (position, processed) in processed.into_iter() {
+            // update last seen block, used for ACS consensus mode
+            let author = processed.author();
+            self.last_seen_blocks
+                .entry(author)
+                .and_modify(|last_seen_block| {
+                    if processed.reference().round > last_seen_block.round {
+                        *last_seen_block = *processed.reference();
+                    }
+                })
+                .or_insert(*processed.reference());
             self.threshold_clock
                 .add_block(*processed.reference(), &self.committee);
             self.pending
@@ -211,8 +226,37 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_post_blocks");
-        // todo: handle post blocks here
-        tracing::debug!("Received post blocks {:?}", blocks);
+        for post_block in blocks {
+            self.acs_manager
+                .add_post_blocks(post_block, &self.committee);
+        }
+        if self.acs_manager.ready_for_mvba(&self.committee)
+            && self.consensus_mode == ConsensusMode::Optimistic
+        {
+            // todo: propose own PoST block if haven't done so, and set change the MVBA by including own block
+            self.consensus_mode = ConsensusMode::Fallback;
+            let my_post_block = UncertifiedPoSTBlockData::new(
+                self.threshold_clock.get_round(),
+                self.last_own_block.block.clone(),
+                self.last_seen_blocks.clone(),
+                Vec::new(),
+            );
+            self.block_store.create_own_acs_block(my_post_block);
+            tracing::info!("Switching to Fallback mode");
+        }
+    }
+
+    pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_post_block_votes");
+        // todo: add votes to the ACS manager, and update own ACS block
+    }
+
+    pub fn commit_acs(&mut self) {
+        self.consensus_mode = ConsensusMode::Optimistic;
+        self.acs_manager.reset();
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -505,6 +549,10 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn epoch_closing_time(&self) -> Arc<AtomicU64> {
         self.epoch_manager.closing_time()
+    }
+
+    pub fn consensus_mode(&self) -> ConsensusMode {
+        self.consensus_mode
     }
 }
 

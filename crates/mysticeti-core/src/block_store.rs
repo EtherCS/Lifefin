@@ -14,27 +14,26 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    acs_manager::UncertifiedPoSTBlockData,
     committee::Committee,
     consensus::linearizer::CommittedSubDag,
+    crypto::PublicKey,
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},
     state::{RecoveredState, RecoveredStateBuilder},
     types::{
-        AuthorityIndex,
-        BaseStatement,
-        BlockDigest,
-        BlockReference,
-        RoundNumber,
-        StatementBlock,
-        Transaction,
-        TransactionLocator,
+        AuthorityIndex, BaseStatement, BlockDigest, BlockReference, RoundNumber, StatementBlock,
+        Transaction, TransactionLocator,
     },
     wal::{Tag, WalPosition, WalReader, WalWriter},
 };
+use ed25519_consensus::Signature;
 
 #[derive(Clone)]
 pub struct BlockStore {
     inner: Arc<RwLock<BlockStoreInner>>,
+    /// (ugly) This stores our own latest PoST block generated from the core
+    post_block: UncertifiedPoSTBlockData,
     block_wal_reader: Arc<WalReader>,
     metrics: Arc<Metrics>,
 }
@@ -123,6 +122,7 @@ impl BlockStore {
         }
         let this = Self {
             block_wal_reader,
+            post_block: UncertifiedPoSTBlockData::default(authority),
             inner: Arc::new(RwLock::new(inner)),
             metrics,
         };
@@ -238,6 +238,24 @@ impl BlockStore {
     ) -> Vec<Data<StatementBlock>> {
         let entries = self.inner.read().get_own_blocks(from_excluded, limit);
         self.read_index_vec(entries)
+    }
+
+    pub fn create_own_acs_block(&mut self, post_block: UncertifiedPoSTBlockData) {
+        self.post_block = post_block;
+    }
+
+    pub fn update_own_acs_block_with_signature(&mut self, signature: (PublicKey, Signature)) {
+        self.post_block.signatures.push(signature);
+    }
+
+    pub fn get_own_acs_block(
+        &self,
+        last_stuck_round: RoundNumber,
+    ) -> Option<UncertifiedPoSTBlockData> {
+        if self.post_block.stuck_round <= last_stuck_round {
+            return None;
+        }
+        Some(self.post_block.clone())
     }
 
     pub fn get_others_blocks(
