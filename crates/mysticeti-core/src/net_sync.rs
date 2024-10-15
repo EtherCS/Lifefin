@@ -189,7 +189,8 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .send(NetworkMessage::SubscribeOwnFrom(last_seen))
             .await
             .ok()?;
-
+        // subscribe to ACS blocks
+        connection.sender.send(NetworkMessage::SubscribeOwnACSAfter(0)).await.ok()?;
         let mut disseminator = BlockDisseminator::new(
             connection.sender.clone(),
             inner.clone(),
@@ -201,12 +202,23 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         inner.syncer.authority_connection(id, true).await;
 
         let peer = format_authority_index(id);
+        let quorum_threshold = inner.committee.quorum_threshold();
         // Ether: handle messages here
         // Ether todo: handle PoST messages
         while let Some(message) = inner.recv_or_stopped(&mut connection.receiver).await {
             match message {
                 NetworkMessage::SubscribeOwnFrom(round) => {
                     disseminator.disseminate_own_blocks(round).await
+                    
+                }
+                NetworkMessage::SubscribeOwnACSAfter(round) => {
+                    disseminator.disseminate_own_acs_block(round, quorum_threshold).await
+                }
+                NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
+                    // Ether: handle PoST messages
+                    // Ether todo: handle PoST messages
+                    tracing::debug!("Received post block vote {} from {}", post_block_vote.meta_post_block.stuck_block.reference(), peer);
+                    inner.syncer.add_post_block_votes(vec![post_block_vote]).await;
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
@@ -238,6 +250,10 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 }
                 NetworkMessage::BlockNotFound(_references) => {
                     // TODO: leverage this signal to request blocks from other peers
+                }
+                NetworkMessage::MetaProofOfStuckBlock(meta_post_block) => {
+                    tracing::debug!("Received meta post blocks {} from {}", meta_post_block.stuck_block.reference(), peer);
+                    // todo: sign it
                 }
                 NetworkMessage::ProofOfStuckBlock(post_block) => {  
                     // Ether: handle PoST messages

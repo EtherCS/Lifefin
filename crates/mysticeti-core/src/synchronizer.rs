@@ -8,13 +8,14 @@ use rand::{seq::SliceRandom, thread_rng};
 use tokio::sync::mpsc;
 
 use crate::{
+    acs_manager::MetaPoSTBlockData,
     block_handler::BlockHandler,
     metrics::Metrics,
     net_sync::{self, NetworkSyncerInner},
     network::NetworkMessage,
     runtime::{sleep, timestamp_utc, Handle, JoinHandle},
     syncer::CommitObserver,
-    types::{AuthorityIndex, BlockReference, RoundNumber},
+    types::{AuthorityIndex, BlockReference, RoundNumber, Stake},
 };
 
 // TODO: A central controller will eventually dynamically update these parameters.
@@ -56,6 +57,8 @@ pub struct BlockDisseminator<H: BlockHandler, C: CommitObserver> {
     inner: Arc<NetworkSyncerInner<H, C>>,
     /// The handle of the task disseminating our own blocks.
     own_blocks: Option<JoinHandle<Option<()>>>,
+    /// The handle of the task disseminating our acs block
+    own_acs_blocks: Option<JoinHandle<Option<()>>>,
     /// The handles of tasks disseminating other nodes' blocks.
     other_blocks: Vec<JoinHandle<Option<()>>>,
     /// The parameters of the synchronizer.
@@ -79,6 +82,7 @@ where
             sender,
             inner,
             own_blocks: None,
+            own_acs_blocks: None,
             other_blocks: Vec::new(),
             parameters,
             metrics,
@@ -88,6 +92,10 @@ where
     pub async fn shutdown(mut self) {
         let mut waiters = Vec::with_capacity(1 + self.other_blocks.len());
         if let Some(handle) = self.own_blocks.take() {
+            handle.abort();
+            waiters.push(handle);
+        }
+        if let Some(handle) = self.own_acs_blocks.take() {
             handle.abort();
             waiters.push(handle);
         }
@@ -138,6 +146,21 @@ where
         self.own_blocks = Some(handle);
     }
 
+    pub async fn disseminate_own_acs_block(&mut self, round: RoundNumber, quorum_threshold: Stake) {
+        if let Some(existing) = self.own_acs_blocks.take() {
+            existing.abort();
+            existing.await.ok();
+        }
+
+        let acs_handle = Handle::current().spawn(Self::stream_own_acs_blocks(
+            self.sender.clone(),
+            self.inner.clone(),
+            round,
+            quorum_threshold,
+        ));
+        self.own_acs_blocks = Some(acs_handle);
+    }
+
     async fn stream_own_blocks(
         to: mpsc::Sender<NetworkMessage>,
         inner: Arc<NetworkSyncerInner<H, C>>,
@@ -150,6 +173,38 @@ where
             for block in blocks {
                 round = block.round();
                 to.send(NetworkMessage::Block(block)).await.ok()?;
+            }
+            notified.await
+        }
+    }
+
+    async fn stream_own_acs_blocks(
+        to: mpsc::Sender<NetworkMessage>,
+        inner: Arc<NetworkSyncerInner<H, C>>,
+        mut round: RoundNumber,
+        quorum_threshold: Stake,
+    ) -> Option<()> {
+        loop {
+            let notified = inner.notify.notified();
+            if let Some(post_block) = inner.block_store.get_own_acs_block(round) {
+                // check if we get enough (n-f) signatures
+                // if not, just send the metadata of the PoST block
+                // otherwise, send the (certified) PoST block
+                if post_block.signatures.len() as u64 <= quorum_threshold {
+                    let meta_post_block = MetaPoSTBlockData::new(
+                        post_block.stuck_round,
+                        post_block.stuck_block.clone(),
+                        post_block.seen_blocks.clone(),
+                    );
+                    to.send(NetworkMessage::MetaProofOfStuckBlock(meta_post_block))
+                        .await
+                        .ok()?;
+                } else {
+                    round = post_block.get_stuck_round();
+                    to.send(NetworkMessage::ProofOfStuckBlock(post_block))
+                        .await
+                        .ok()?;
+                }
             }
             notified.await
         }

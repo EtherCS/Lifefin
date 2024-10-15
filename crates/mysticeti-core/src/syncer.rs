@@ -6,6 +6,7 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
+    acs_manager::{PoSTBlockVote, UncertifiedPoSTBlockData},
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
@@ -13,8 +14,9 @@ use crate::{
     data::Data,
     metrics::{Metrics, UtilizationTimerVecExt},
     runtime::timestamp_utc,
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
+use acs::acs_types::ConsensusMode;
 
 pub struct Syncer<H: BlockHandler, S: SyncerSignals, C: CommitObserver> {
     core: Core<H>,
@@ -67,8 +69,16 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .metrics
             .utilization_timer
             .utilization_timer("Syncer::add_blocks");
-        self.core.add_blocks(blocks);
-        self.try_new_block();
+        // add normal blocks only when we are in the optimistic mode
+        match self.core.consensus_mode() {
+            ConsensusMode::Optimistic => {
+                self.core.add_blocks(blocks);
+                self.try_new_block();
+            }
+            ConsensusMode::Fallback => {
+                // self.add_blocks_fallback(blocks);
+            }
+        }
     }
 
     pub fn add_post_blocks(&mut self, blocks: Vec<UncertifiedPoSTBlockData>) {
@@ -77,6 +87,14 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .utilization_timer
             .utilization_timer("Syncer::add_post_blocks");
         self.core.add_post_blocks(blocks);
+    }
+
+    pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_post_block_votes");
+        self.core.add_post_block_votes(votes);
     }
 
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {
