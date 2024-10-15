@@ -13,9 +13,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpListener,
-        TcpSocket,
-        TcpStream,
+        TcpListener, TcpSocket, TcpStream,
     },
     runtime::Handle,
     select,
@@ -24,12 +22,13 @@ use tokio::{
 };
 
 use crate::{
+    acs_manager::{MetaPoSTBlockData, PoSTBlockVote, UncertifiedPoSTBlockData},
     config::NodePublicConfig,
     data::Data,
     metrics::{print_network_address_table, Metrics},
     runtime,
     stat::HistogramSender,
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock, UncertifiedPoSTBlockData},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -37,11 +36,14 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Debug, Serialize, Deserialize)]
 pub enum NetworkMessage {
     SubscribeOwnFrom(RoundNumber), // subscribe from round number excluding
+    SubscribeOwnACSAfter(RoundNumber), // subscribe acs block after round number
     Block(Data<StatementBlock>),
     /// Request a few specific block references (this is not indented for large requests).
     RequestBlocks(Vec<BlockReference>),
     /// Indicate that a requested block is not found.
     BlockNotFound(Vec<BlockReference>),
+    MetaProofOfStuckBlock(MetaPoSTBlockData),
+    ProofOfStuckBlockVote(PoSTBlockVote),
     ProofOfStuckBlock(UncertifiedPoSTBlockData),
 }
 
