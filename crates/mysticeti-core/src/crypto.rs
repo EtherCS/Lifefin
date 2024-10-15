@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt;
+use std::collections::HashMap;
 
 use digest::Digest;
-#[cfg(not(test))]
+// #[cfg(not(test))]
 use ed25519_consensus::Signature;
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -13,8 +14,7 @@ use zeroize::Zeroize;
 #[cfg(not(test))]
 use crate::types::Vote;
 use crate::{
-    serde::{ByteRepr, BytesVisitor},
-    types::{
+    acs_manager::PoSTBlockVote, data::Data, serde::{ByteRepr, BytesVisitor}, types::{
         AuthorityIndex,
         BaseStatement,
         BlockReference,
@@ -22,19 +22,23 @@ use crate::{
         RoundNumber,
         StatementBlock,
         TimestampNs,
-    },
+    }
 };
 
 pub const SIGNATURE_SIZE: usize = 64;
 pub const BLOCK_DIGEST_SIZE: usize = 32;
+pub const POST_BLOCK_DIGEST_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
 pub struct BlockDigest([u8; BLOCK_DIGEST_SIZE]);
 
+#[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
+pub struct PoSTBlockDigest([u8; POST_BLOCK_DIGEST_SIZE]);
+
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct PublicKey(ed25519_consensus::VerificationKey);
 
-#[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Hash, Debug)]
 pub struct SignatureBytes([u8; SIGNATURE_SIZE]);
 
 // Box ensures value is not copied in memory when Signer itself is moved around for better security
@@ -134,6 +138,40 @@ impl BlockDigest {
     }
 }
 
+type PoSTBlockHasher = blake2::Blake2b<digest::consts::U32>;
+impl PoSTBlockDigest {
+    pub fn new(
+        stuck_round: RoundNumber,
+        stuck_block: &Data<StatementBlock>,
+        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+        signature: &SignatureBytes,
+    ) -> Self {
+        let mut hasher = PoSTBlockHasher::default();
+        Self::digest_without_signature(
+            &mut hasher,
+            stuck_round,
+            stuck_block,
+            seen_blocks,
+        );
+        hasher.update(signature);
+        Self(hasher.finalize().into())
+    }
+
+    fn digest_without_signature(
+        hasher: &mut PoSTBlockHasher,
+        stuck_round: RoundNumber,
+        stuck_block: &Data<StatementBlock>,
+        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+    ) {
+        stuck_round.crypto_hash(hasher);
+        stuck_block.reference().digest.crypto_hash(hasher);
+        for (authority, block_reference) in seen_blocks {
+            authority.crypto_hash(hasher);
+            block_reference.crypto_hash(hasher);
+        }
+    }
+}
+
 pub trait AsBytes {
     // This is pretty much same as AsRef<[u8]>
     //
@@ -176,6 +214,19 @@ impl<T: AsBytes> CryptoHash for T {
 }
 
 impl PublicKey {
+    pub fn verify_post_block_vote(&self, post_block_vote: &PoSTBlockVote) -> Result<(), ed25519_consensus::Error>  {
+        let signature = Signature::from(post_block_vote.signature().0);
+        let mut hasher = PoSTBlockHasher::default();
+        PoSTBlockDigest::digest_without_signature(
+            &mut hasher,
+            post_block_vote.meta_post_block.stuck_round(),
+            post_block_vote.meta_post_block.stuck_block(),
+            post_block_vote.meta_post_block.seen_blocks(),
+        );
+        let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
+        self.0.verify(&signature, digest.as_ref())
+    }
+
     #[cfg(not(test))]
     pub fn verify_block(&self, block: &StatementBlock) -> Result<(), ed25519_consensus::Error> {
         let signature = Signature::from(block.signature().0);
@@ -205,6 +256,24 @@ impl Signer {
         (0..n)
             .map(|_| Self(Box::new(ed25519_consensus::SigningKey::new(&mut rng))))
             .collect()
+    }
+
+    pub fn sign_post_block(
+        &self, 
+        stuck_round: RoundNumber,
+        stuck_block: &Data<StatementBlock>,
+        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+    ) -> SignatureBytes {
+        let mut hasher = PoSTBlockHasher::default();
+        PoSTBlockDigest::digest_without_signature(
+            &mut hasher,
+            stuck_round,
+            stuck_block,
+            seen_blocks,
+        );
+        let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
+        let signature = self.0.sign(digest.as_ref());
+        SignatureBytes(signature.to_bytes())
     }
 
     #[cfg(not(test))]

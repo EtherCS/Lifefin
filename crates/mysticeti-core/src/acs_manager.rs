@@ -1,6 +1,6 @@
 use crate::{
     committee::Committee,
-    crypto::PublicKey,
+    crypto::{PublicKey, SignatureBytes, Signer},
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
@@ -88,15 +88,15 @@ impl MetaPoSTBlockData {
         }
     }
 
-    pub fn get_stuck_round(&self) -> &RoundNumber {
-        &self.stuck_round
+    pub fn stuck_round(&self) -> RoundNumber {
+        self.stuck_round
     }
 
-    pub fn get_stuck_block(&self) -> &Data<StatementBlock> {
+    pub fn stuck_block(&self) -> &Data<StatementBlock> {
         &self.stuck_block
     }
 
-    pub fn get_seen_blocks(&self) -> &HashMap<AuthorityIndex, BlockReference> {
+    pub fn seen_blocks(&self) -> &HashMap<AuthorityIndex, BlockReference> {
         &self.seen_blocks
     }
 }
@@ -104,22 +104,25 @@ impl MetaPoSTBlockData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoSTBlockVote {
     pub meta_post_block: MetaPoSTBlockData,
-    pub signature: Signature,
+    pub author: PublicKey,
+    pub signature: SignatureBytes,
 }
 
 impl PoSTBlockVote {
-    pub async fn new(meta_post_block: MetaPoSTBlockData, signature: Signature) -> Self {
+    pub async fn new(meta_post_block: MetaPoSTBlockData, author: PublicKey, signer: Signer) -> Self {
+        let signature= signer.sign_post_block(meta_post_block.stuck_round, meta_post_block.stuck_block(), meta_post_block.seen_blocks());
         Self {
             meta_post_block,
+            author,
             signature,
         }
     }
 
-    pub fn get_meta_post_block(&self) -> &MetaPoSTBlockData {
+    pub fn meta_post_block(&self) -> &MetaPoSTBlockData {
         &self.meta_post_block
     }
 
-    pub fn get_signature(&self) -> &Signature {
+    pub fn signature(&self) -> &SignatureBytes {
         &self.signature
     }
 }
