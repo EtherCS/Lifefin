@@ -22,7 +22,6 @@ use std::{
 };
 
 use digest::Digest;
-use ed25519_consensus::Signature;
 use eyre::{bail, ensure};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -330,103 +329,6 @@ impl StatementBlock {
 
     pub fn detailed(&self) -> Detailed {
         Detailed(self)
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UncertifiedPoSTBlockData {
-    pub stuck_round: RoundNumber,
-    pub stuck_block: Data<StatementBlock>,
-    pub seen_blocks: Vec<Data<StatementBlock>>, // ordered by nodes' public keys
-    pub signatures: Vec<(PublicKey, Signature)>,
-}
-
-impl UncertifiedPoSTBlockData {
-    pub fn new(
-        stuck_round: RoundNumber,
-        stuck_block: Data<StatementBlock>,
-        seen_blocks: Vec<Data<StatementBlock>>,
-        signatures: Vec<(PublicKey, Signature)>,
-    ) -> Self {
-        Self {
-            stuck_round,
-            stuck_block,
-            seen_blocks,
-            signatures,
-        }
-    }
-
-    pub fn get_stuck_round(&self) -> &RoundNumber {
-        &self.stuck_round
-    }
-
-    pub fn get_stuck_block(&self) -> &Data<StatementBlock> {
-        &self.stuck_block
-    }
-
-    pub fn get_seen_blocks(&self) -> &Vec<Data<StatementBlock>> {
-        &self.seen_blocks
-    }
-
-    pub fn get_signatures(&self) -> &Vec<(PublicKey, Signature)> {
-        &self.signatures
-    }
-
-    pub fn verify(&self, _committee: &Committee) -> eyre::Result<()> {
-        // todo: verify
-        // let round = self.round();
-        // let digest = BlockDigest::new(
-        //     self.author(),
-        //     round,
-        //     &self.includes,
-        //     &self.statements,
-        //     self.meta_creation_time_ns,
-        //     self.epoch_marker,
-        //     &self.signature,
-        // );
-        // ensure!(
-        //     digest == self.digest(),
-        //     "Digest does not match, calculated {:?}, provided {:?}",
-        //     digest,
-        //     self.digest()
-        // );
-        // let pub_key = committee.get_public_key(self.author());
-        // let Some(pub_key) = pub_key else {
-        //     bail!("Unknown block author {}", self.author())
-        // };
-        // if round == GENESIS_ROUND {
-        //     bail!("Genesis block should not go through verification");
-        // }
-        // if let Err(e) = pub_key.verify_block(self) {
-        //     bail!("Block signature verification has failed: {:?}", e);
-        // }
-        // for include in &self.includes {
-        //     // Also check duplicate includes?
-        //     ensure!(
-        //         committee.known_authority(include.authority),
-        //         "Include {:?} references unknown authority",
-        //         include
-        //     );
-        //     ensure!(
-        //         include.round < round,
-        //         "Include {:?} round is greater or equal to own round {}",
-        //         include,
-        //         round
-        //     );
-        // }
-        // for statement in &self.statements {
-        //     // Also check duplicate statements?
-        //     match statement {
-        //         BaseStatement::Share(_) => {}
-        //         BaseStatement::Vote(_, _) => {}
-        //         BaseStatement::VoteRange(range) => range.verify()?,
-        //     }
-        // }
-        // ensure!(
-        //     threshold_clock_valid_non_genesis(self, committee),
-        //     "Threshold clock is not valid"
-        // );
-        Ok(())
     }
 }
 #[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
