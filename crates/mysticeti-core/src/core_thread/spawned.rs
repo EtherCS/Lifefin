@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc, thread};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    acs_manager::{PoSTBlockVote, UncertifiedPoSTBlockData},
+    acs_manager::{PoSTBlockVote, MetaPoSTBlockData, UncertifiedPoSTBlockData},
     block_handler::BlockHandler,
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},
@@ -36,6 +36,7 @@ enum CoreThreadCommand {
     /// Indicate that a connection to an authority was dropped.
     ConnectionDropped(AuthorityIndex, oneshot::Sender<()>),
     AddPoSTBlocks(Vec<UncertifiedPoSTBlockData>, oneshot::Sender<()>),
+    AddMetaPoSTBlocks(Vec<MetaPoSTBlockData>, oneshot::Sender<()>),
     AddPoSTBlockVotes(Vec<PoSTBlockVote>, oneshot::Sender<()>),
 }
 
@@ -79,6 +80,13 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
     pub async fn add_post_block_votes(&self, votes: Vec<PoSTBlockVote>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddPoSTBlockVotes(votes, sender))
+            .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_meta_post_blocks(&self, meta_blocks: Vec<MetaPoSTBlockData>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddMetaPoSTBlocks(meta_blocks, sender))
             .await;
         receiver.await.expect("core thread is not expected to stop");
     }
@@ -157,6 +165,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                 }
                 CoreThreadCommand::AddPoSTBlocks(post_blocks, sender) => {
                     self.syncer.add_post_blocks(post_blocks);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddMetaPoSTBlocks(meta_post_blocks, sender, ) => {
+                    self.syncer.add_meta_post_blocks(meta_post_blocks);
                     sender.send(()).ok();
                 }
                 CoreThreadCommand::AddPoSTBlockVotes(post_block_votes, sender, ) => {

@@ -215,10 +215,29 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     disseminator.disseminate_own_acs_block(round, quorum_threshold).await
                 }
                 NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
-                    // Ether: handle PoST messages
-                    // Ether todo: handle PoST messages
+                    // todo: handle PoST messages
                     tracing::debug!("Received post block vote {} from {}", post_block_vote.meta_post_block.stuck_block.reference(), peer);
                     inner.syncer.add_post_block_votes(vec![post_block_vote]).await;
+                }
+                NetworkMessage::MetaProofOfStuckBlock(meta_post_block) => {
+                    tracing::debug!("Received meta post blocks {} from {}", meta_post_block.stuck_block.reference(), peer);
+                    // todo: sign it
+                    inner.syncer.add_meta_post_blocks(vec![meta_post_block]).await;
+                }
+                NetworkMessage::ProofOfStuckBlock(post_block) => {  
+                    // handle PoST messages
+                    tracing::debug!("Received post blocks {} from {}", post_block.stuck_block.reference(), peer);
+                    if let Err(e) = post_block.verify(&inner.committee) {
+                        tracing::warn!(
+                            "Rejected incorrect PoST block {} from {}: {:?}",
+                            post_block.stuck_block.reference(),
+                            peer,
+                            e
+                        );
+                        // Terminate connection upon receiving incorrect block.
+                        break;
+                    }
+                    inner.syncer.add_post_blocks(vec![post_block]).await;
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
@@ -250,26 +269,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 }
                 NetworkMessage::BlockNotFound(_references) => {
                     // TODO: leverage this signal to request blocks from other peers
-                }
-                NetworkMessage::MetaProofOfStuckBlock(meta_post_block) => {
-                    tracing::debug!("Received meta post blocks {} from {}", meta_post_block.stuck_block.reference(), peer);
-                    // todo: sign it
-                }
-                NetworkMessage::ProofOfStuckBlock(post_block) => {  
-                    // Ether: handle PoST messages
-                    // Ether todo: handle PoST messages
-                    tracing::debug!("Received post blocks {} from {}", post_block.stuck_block.reference(), peer);
-                    if let Err(e) = post_block.verify(&inner.committee) {
-                        tracing::warn!(
-                            "Rejected incorrect PoST block {} from {}: {:?}",
-                            post_block.stuck_block.reference(),
-                            peer,
-                            e
-                        );
-                        // Terminate connection upon receiving incorrect block.
-                        break;
-                    }
-                    inner.syncer.add_post_blocks(vec![post_block]).await;
                 }
             }
         }

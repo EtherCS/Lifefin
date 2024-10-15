@@ -12,7 +12,7 @@ use acs::acs_types::ConsensusMode;
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{ACSManager, PoSTBlockVote, UncertifiedPoSTBlockData},
+    acs_manager::{ACSManager, PoSTBlockVote, MetaPoSTBlockData, UncertifiedPoSTBlockData},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -246,6 +246,15 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
+    // handle meta PoST blocks received from other authorities here
+    pub fn add_meta_post_blocks(&mut self, blocks: Vec<MetaPoSTBlockData>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_meta_post_blocks");
+    }
+
+    // handle vote for own ACS block here
     pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
         let _timer = self
             .metrics
