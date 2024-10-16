@@ -1,26 +1,24 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::{Arc, RwLock}};
 
 use futures::future::join_all;
-use rand::{seq::SliceRandom, thread_rng};
 use tokio::sync::mpsc;
 
 use crate::{
-    acs_manager::{MetaPoSTBlockData, PoSTBlockVote},
-    block_handler::BlockHandler,
+    acs_manager::{ACSManager, MetaPoSTBlockData, PoSTBlockVote},
+    committee::Committee,
     crypto::{PublicKey, Signer},
-    metrics::Metrics,
-    net_sync::{self, NetworkSyncerInner},
     network::NetworkMessage,
-    runtime::{sleep, timestamp_utc, Handle, JoinHandle},
-    syncer::CommitObserver,
-    types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
+    runtime::{Handle, JoinHandle},
+    types::{RoundNumber, StatementBlock},
 };
 
 
 pub struct PoSTBlockDisseminator {
+    /// The ACS manager, shared with the core
+    acs_manager: Arc<RwLock<ACSManager>>,
     /// The sender to the network.
     sender: mpsc::Sender<NetworkMessage>,
     /// The handle of the task disseminating our acs block
@@ -32,10 +30,12 @@ pub struct PoSTBlockDisseminator {
 impl PoSTBlockDisseminator
 {
     pub fn new(
+        acs_manager: Arc<RwLock<ACSManager>>,
         sender: mpsc::Sender<NetworkMessage>,
         signer: Signer,
     ) -> Self {
         Self {
+            acs_manager,
             sender,
             own_acs_blocks: None,
             signer,
@@ -43,6 +43,12 @@ impl PoSTBlockDisseminator
     }
 
     pub async fn shutdown(mut self) {
+        let mut waiters = Vec::with_capacity(1);
+        if let Some(handle) = self.own_acs_blocks.take() {
+            handle.abort();
+            waiters.push(handle);
+        }
+        join_all(waiters).await;
     }
 
     // todo: 
@@ -54,32 +60,41 @@ impl PoSTBlockDisseminator
         let vote = PoSTBlockVote::new(meta_post_block, author, self.signer.clone()).await;
         self.sender.send(NetworkMessage::ProofOfStuckBlockVote(vote)).await.ok()
     }
-    
-    pub async fn disseminate_own_acs_block(&mut self, round: RoundNumber, quorum_threshold: Stake) {
+
+    pub async fn disseminate_own_acs_block(&mut self, round: RoundNumber, committee: Committee,) {
         if let Some(existing) = self.own_acs_blocks.take() {
             existing.abort();
             existing.await.ok();
         }
 
         let acs_handle = Handle::current().spawn(Self::stream_own_acs_blocks(
+            Arc::clone(&self.acs_manager),
             self.sender.clone(),
             round,
-            quorum_threshold,
+            // quorum_threshold,
+            committee,
         ));
         self.own_acs_blocks = Some(acs_handle);
     }
 
     async fn stream_own_acs_blocks(
+        acs_manager: Arc<RwLock<ACSManager>>,
         to: mpsc::Sender<NetworkMessage>,
         mut round: RoundNumber,
-        quorum_threshold: Stake,
+        committee: Committee,
+        // quorum_threshold: Stake,
     ) -> Option<()> {
         loop {
+            let mut mvba = 0;
             // just for test
-            let meta_post_block = MetaPoSTBlockData::new(round, StatementBlock::new_genesis(0), HashMap::new());
-            to.send(NetworkMessage::MetaProofOfStuckBlock(meta_post_block))
-                .await
-                .ok()?;
+            if acs_manager.read().expect("Fail to read acs manager").ready_for_mvba(&committee) {
+                mvba = acs_manager.read().expect("Fail to read acs manager").mvba();
+                let meta_post_block = MetaPoSTBlockData::new(round, StatementBlock::new_genesis(0), HashMap::new());
+                to.send(NetworkMessage::MetaProofOfStuckBlock(meta_post_block))
+                    .await
+                    .ok()?;
+                println!("send meta post block with MVBA {}", mvba);
+            }
             // let notified = inner.notify.notified();
             // if let Some(post_block) = inner.block_store.get_own_acs_block(round) {
             //     // check if we get enough (n-f) signatures

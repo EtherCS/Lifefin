@@ -4,7 +4,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     mem,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{atomic::AtomicU64, Arc, RwLock},
 };
 
 use acs::acs_types::ConsensusMode;
@@ -56,7 +56,7 @@ pub struct Core<H: BlockHandler> {
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
     consensus_mode: ConsensusMode,
-    acs_manager: ACSManager,
+    acs_manager: Arc<RwLock<ACSManager>>,
     last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
 }
 
@@ -140,7 +140,7 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
-        let acs_manager = ACSManager::new(0);
+        let acs_manager = Arc::new(RwLock::new(ACSManager::new(0)));
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -228,9 +228,11 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer("Core::add_post_blocks");
         for post_block in blocks {
             self.acs_manager
+                .write()
+                .expect("ACS manager fails to write post blocks")
                 .add_post_blocks(post_block, &self.committee);
         }
-        if self.acs_manager.ready_for_mvba(&self.committee)
+        if self.acs_manager.read().expect("ACS manager fails to read").ready_for_mvba(&self.committee)
             && self.consensus_mode == ConsensusMode::Optimistic
         {
             // todo: propose own PoST block if haven't done so, and set change the MVBA by including own block
@@ -265,7 +267,7 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn commit_acs(&mut self) {
         self.consensus_mode = ConsensusMode::Optimistic;
-        self.acs_manager.reset();
+        self.acs_manager.write().expect("ACS manager fails to reset").reset();
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -562,6 +564,10 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn consensus_mode(&self) -> ConsensusMode {
         self.consensus_mode
+    }
+
+    pub fn acs_manager(&self) -> Arc<RwLock<ACSManager>> {
+        Arc::clone(&self.acs_manager)
     }
 }
 

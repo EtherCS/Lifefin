@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, RwLock,
     },
     time::Duration,
 };
@@ -17,6 +17,7 @@ use tokio::{
 };
 
 use crate::{
+    acs_manager::ACSManager,
     acs_synchronizer::PoSTBlockDisseminator,
     block_handler::BlockHandler,
     block_store::BlockStore,
@@ -74,6 +75,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         let wal_syncer = core.wal_syncer();
         let block_store = core.block_store().clone();
         let epoch_closing_time = core.epoch_closing_time();
+        let acs_manager = core.acs_manager();
         let mut syncer = Syncer::new(
             core,
             commit_period,
@@ -110,6 +112,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             block_fetcher,
             metrics.clone(),
             private_config,
+            acs_manager,
         ));
         let syncer_task = AsyncWalSyncer::start(wal_syncer, stop_sender, epoch_sender);
         Self {
@@ -139,6 +142,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
         private_config: NodePrivateConfig,
+        acs_manager: Arc<RwLock<ACSManager>>,
     ) {
         let mut connections: HashMap<usize, JoinHandle<Option<()>>> = HashMap::new();
         let handle = Handle::current();
@@ -165,6 +169,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 block_fetcher.clone(),
                 metrics.clone(),
                 private_config.clone(),
+                Arc::clone(&acs_manager),
             ));
             connections.insert(peer_id, task);
         }
@@ -186,6 +191,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
         private_config: NodePrivateConfig,
+        acs_manager: Arc<RwLock<ACSManager>>,
     ) -> Option<()> {
         let last_seen = inner
             .block_store
@@ -196,7 +202,11 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .await
             .ok()?;
         // subscribe to ACS blocks
-        connection.sender.send(NetworkMessage::SubscribeOwnACSAfter(0)).await.ok()?;
+        connection
+            .sender
+            .send(NetworkMessage::SubscribeOwnACSAfter(0))
+            .await
+            .ok()?;
         let signer = private_config.keypair;
         let mut disseminator = BlockDisseminator::new(
             connection.sender.clone(),
@@ -205,34 +215,44 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             metrics.clone(),
         );
 
-        let mut post_block_disseminator = PoSTBlockDisseminator::new(
-            connection.sender.clone(),
-            signer,
-        );
+        let mut post_block_disseminator =
+            PoSTBlockDisseminator::new(acs_manager, connection.sender.clone(), signer);
 
         let id = connection.peer_id as AuthorityIndex;
         inner.syncer.authority_connection(id, true).await;
 
         let peer = format_authority_index(id);
-        let quorum_threshold = inner.committee.quorum_threshold();
+        let committee_clone = (*inner.committee).clone();
         // Ether: handle messages here
         // Ether todo: handle PoST messages
         while let Some(message) = inner.recv_or_stopped(&mut connection.receiver).await {
             match message {
                 NetworkMessage::SubscribeOwnFrom(round) => {
                     disseminator.disseminate_own_blocks(round).await
-                    
                 }
                 NetworkMessage::SubscribeOwnACSAfter(round) => {
-                    post_block_disseminator.disseminate_own_acs_block(round, quorum_threshold).await
+                    post_block_disseminator
+                        .disseminate_own_acs_block(round, committee_clone.clone())
+                        .await
                 }
                 NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
                     // todo: handle PoST messages
-                    tracing::debug!("Received post block vote {} from {}", post_block_vote.meta_post_block.stuck_block.reference(), peer);
-                    inner.syncer.add_post_block_votes(vec![post_block_vote]).await;
+                    tracing::debug!(
+                        "Received post block vote {} from {}",
+                        post_block_vote.meta_post_block.stuck_block.reference(),
+                        peer
+                    );
+                    inner
+                        .syncer
+                        .add_post_block_votes(vec![post_block_vote])
+                        .await;
                 }
                 NetworkMessage::MetaProofOfStuckBlock(meta_post_block) => {
-                    tracing::debug!("Received meta post blocks {} from {}", meta_post_block.stuck_block.reference(), peer);
+                    tracing::debug!(
+                        "Received meta post blocks {} from {}",
+                        meta_post_block.stuck_block.reference(),
+                        peer
+                    );
                     // todo: sign it
                     // inner.syncer.add_meta_post_blocks(vec![meta_post_block]).await;
                     // let authority = connection.peer_id as AuthorityIndex;
@@ -244,9 +264,13 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     //     break;
                     // }
                 }
-                NetworkMessage::ProofOfStuckBlock(post_block) => {  
+                NetworkMessage::ProofOfStuckBlock(post_block) => {
                     // handle PoST messages
-                    tracing::debug!("Received post blocks {} from {}", post_block.stuck_block.reference(), peer);
+                    tracing::debug!(
+                        "Received post blocks {} from {}",
+                        post_block.stuck_block.reference(),
+                        peer
+                    );
                     if let Err(e) = post_block.verify(&inner.committee) {
                         tracing::warn!(
                             "Rejected incorrect PoST block {} from {}: {:?}",
@@ -294,6 +318,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         }
         inner.syncer.authority_connection(id, false).await;
         disseminator.shutdown().await;
+        post_block_disseminator.shutdown().await;
         block_fetcher.remove_authority(id).await;
         None
     }
@@ -507,10 +532,7 @@ mod sim_tests {
         simulator_tracing::setup_simulator_tracing,
         syncer::Syncer,
         test_util::{
-            check_commits,
-            print_stats,
-            rng_at_seed,
-            simulated_network_syncers,
+            check_commits, print_stats, rng_at_seed, simulated_network_syncers,
             simulated_network_syncers_with_epoch_duration,
         },
     };
