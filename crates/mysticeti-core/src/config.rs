@@ -221,7 +221,7 @@ impl NodePublicConfig {
 
 impl ImportExport for NodePublicConfig {}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct NodePrivateConfig {
     authority: AuthorityIndex,
     pub keypair: Signer,

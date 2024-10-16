@@ -103,7 +103,7 @@ impl Validator {
             block_handler,
             authority,
             committee.clone(),
-            private_config,
+            private_config.clone(),
             &public_config,
             metrics.clone(),
             recovered,
@@ -125,6 +125,7 @@ impl Validator {
             public_config.parameters.shutdown_grace_period,
             metrics,
             &public_config,
+            private_config.clone(),
         );
 
         tracing::info!("Validator {authority} listening on {network_address}");
