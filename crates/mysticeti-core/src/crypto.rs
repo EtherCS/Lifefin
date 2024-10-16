@@ -42,7 +42,7 @@ pub struct PublicKey(ed25519_consensus::VerificationKey);
 pub struct SignatureBytes([u8; SIGNATURE_SIZE]);
 
 // Box ensures value is not copied in memory when Signer itself is moved around for better security
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Signer(Box<ed25519_consensus::SigningKey>);
 
 #[cfg(not(test))]
