@@ -17,10 +17,11 @@ use tokio::{
 };
 
 use crate::{
+    acs_synchronizer::PoSTBlockDisseminator,
     block_handler::BlockHandler,
     block_store::BlockStore,
     committee::Committee,
-    config::NodePublicConfig,
+    config::{NodePrivateConfig, NodePublicConfig},
     core::Core,
     core_thread::CoreThreadDispatcher,
     metrics::Metrics,
@@ -61,6 +62,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         shutdown_grace_period: Duration,
         metrics: Arc<Metrics>,
         public_config: &NodePublicConfig,
+        private_config: NodePrivateConfig,
     ) -> Self {
         let authority_index = core.authority();
         let handle = Handle::current();
@@ -107,6 +109,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             shutdown_grace_period,
             block_fetcher,
             metrics.clone(),
+            private_config,
         ));
         let syncer_task = AsyncWalSyncer::start(wal_syncer, stop_sender, epoch_sender);
         Self {
@@ -135,6 +138,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         shutdown_grace_period: Duration,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
+        private_config: NodePrivateConfig,
     ) {
         let mut connections: HashMap<usize, JoinHandle<Option<()>>> = HashMap::new();
         let handle = Handle::current();
@@ -160,6 +164,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 inner.clone(),
                 block_fetcher.clone(),
                 metrics.clone(),
+                private_config.clone(),
             ));
             connections.insert(peer_id, task);
         }
@@ -180,6 +185,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         inner: Arc<NetworkSyncerInner<H, C>>,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
+        private_config: NodePrivateConfig,
     ) -> Option<()> {
         let last_seen = inner
             .block_store
@@ -191,11 +197,17 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .ok()?;
         // subscribe to ACS blocks
         connection.sender.send(NetworkMessage::SubscribeOwnACSAfter(0)).await.ok()?;
+        let signer = private_config.keypair;
         let mut disseminator = BlockDisseminator::new(
             connection.sender.clone(),
             inner.clone(),
             SynchronizerParameters::default(),
             metrics.clone(),
+        );
+
+        let mut post_block_disseminator = PoSTBlockDisseminator::new(
+            connection.sender.clone(),
+            signer,
         );
 
         let id = connection.peer_id as AuthorityIndex;
@@ -212,7 +224,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     
                 }
                 NetworkMessage::SubscribeOwnACSAfter(round) => {
-                    disseminator.disseminate_own_acs_block(round, quorum_threshold).await
+                    post_block_disseminator.disseminate_own_acs_block(round, quorum_threshold).await
                 }
                 NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
                     // todo: handle PoST messages
@@ -222,7 +234,15 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 NetworkMessage::MetaProofOfStuckBlock(meta_post_block) => {
                     tracing::debug!("Received meta post blocks {} from {}", meta_post_block.stuck_block.reference(), peer);
                     // todo: sign it
-                    inner.syncer.add_meta_post_blocks(vec![meta_post_block]).await;
+                    // inner.syncer.add_meta_post_blocks(vec![meta_post_block]).await;
+                    // let authority = connection.peer_id as AuthorityIndex;
+                    // if disseminator
+                    //     .send_vote()
+                    //     .await
+                    //     .is_none()
+                    // {
+                    //     break;
+                    // }
                 }
                 NetworkMessage::ProofOfStuckBlock(post_block) => {  
                     // handle PoST messages
