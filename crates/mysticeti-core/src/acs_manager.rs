@@ -62,6 +62,15 @@ impl ACSManager {
         (self.mvba.count_ones() as u64) > committee.quorum_threshold()
     }
 
+    // this function just for test
+    pub fn set_mvba(&mut self, mvba: MVBA) {
+        self.mvba = mvba;
+    }
+
+    pub fn mvba(&self) -> MVBA {
+        self.mvba
+    }
+
     pub fn reset(&mut self) {
         self.post_blocks.clear();
         self.mvba = 0;
