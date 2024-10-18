@@ -7,7 +7,8 @@ refer to disseminator.disseminate_own_blocks
 ## TODO:
 - generate PoST blocks -> done
 - implement a signature_service for ```PoSTBlockVote``` -> done
-- handle vote of own PoST from other peers (after that, we might need to implement ```stream_own_acs_blocks``` in synchronizer.rs)
+- reconstruct acs message handling from network layer -> done
+- handle vote of own PoST from other peers
 - handle meta PoST (generate Vote and send it back to the authority)
 - update own PoST with signature
 - impl sending PoST blocks interface, refer to '''disseminate_own_blocks''' -> done
