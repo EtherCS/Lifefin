@@ -201,10 +201,16 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .send(NetworkMessage::SubscribeOwnFrom(last_seen))
             .await
             .ok()?;
-        // subscribe to ACS blocks
+        // subscribe to own post blocks
         connection
             .sender
-            .send(NetworkMessage::SubscribeOwnACSAfter(0))
+            .send(NetworkMessage::SubscribeOwnPoSTBlockAfter(0))
+            .await
+            .ok()?;
+        // subscribe to own meta post blocks
+        connection
+            .sender
+            .send(NetworkMessage::SubscribeOwnMetaPoSTBlockAfter(0))
             .await
             .ok()?;
         let signer = private_config.keypair;
@@ -230,9 +236,14 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 NetworkMessage::SubscribeOwnFrom(round) => {
                     disseminator.disseminate_own_blocks(round).await
                 }
-                NetworkMessage::SubscribeOwnACSAfter(round) => {
+                NetworkMessage::SubscribeOwnPoSTBlockAfter(round) => {
                     post_block_disseminator
-                        .disseminate_own_acs_block(round, committee_clone.clone())
+                        .disseminate_own_post_block(round)
+                        .await
+                }
+                NetworkMessage::SubscribeOwnMetaPoSTBlockAfter(round) => {
+                    post_block_disseminator
+                        .disseminate_own_meta_post_block(round)
                         .await
                 }
                 NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
@@ -282,6 +293,11 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         break;
                     }
                     inner.syncer.add_post_blocks(vec![post_block]).await;
+                }
+                NetworkMessage::MVBA(mvba) => {
+                    // handle PoST messages
+                    tracing::debug!("Received MVBA {} from {}", mvba, peer);
+                    // todo: handle MVBA, run FIN ACS protocol
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);

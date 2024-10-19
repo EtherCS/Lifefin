@@ -140,7 +140,7 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
-        let acs_manager = Arc::new(RwLock::new(ACSManager::new(0)));
+        let acs_manager = Arc::new(RwLock::new(ACSManager::new(authority, (*committee).clone(), 0)));
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -230,7 +230,7 @@ impl<H: BlockHandler> Core<H> {
             self.acs_manager
                 .write()
                 .expect("ACS manager fails to write post blocks")
-                .add_post_blocks(post_block, &self.committee);
+                .add_post_blocks(post_block);
         }
         if self.acs_manager.read().expect("ACS manager fails to read").ready_for_mvba(&self.committee)
             && self.consensus_mode == ConsensusMode::Optimistic

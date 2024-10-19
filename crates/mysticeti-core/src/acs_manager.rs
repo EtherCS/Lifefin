@@ -12,21 +12,25 @@ use std::collections::HashMap;
 pub type MVBA = u128;
 
 pub struct ACSManager {
-    round: RoundNumber,
+    authority: AuthorityIndex,
+    committee: Committee,
+    round: RoundNumber, // the last round agreed by the ACS mode
     post_blocks: HashMap<AuthorityIndex, UncertifiedPoSTBlockData>,
     mvba: MVBA, // the MVBA proposal of the node
 }
 
 impl ACSManager {
-    pub fn new(round: RoundNumber) -> Self {
+    pub fn new(authority: AuthorityIndex, committee: Committee, round: RoundNumber) -> Self {
         Self {
+            authority,
+            committee,
             round,
             post_blocks: HashMap::new(),
             mvba: 0,
         }
     }
 
-    pub fn add_post_blocks(&mut self, post_block: UncertifiedPoSTBlockData, committee: &Committee) {
+    pub fn add_post_blocks(&mut self, post_block: UncertifiedPoSTBlockData) {
         match post_block.stuck_round.cmp(&self.round) {
             // ignore a PoST block with a round less than or equal to the last ACS round
             Ordering::Less | Ordering::Equal => {}
@@ -46,7 +50,7 @@ impl ACSManager {
                     return;
                 }
                 self.post_blocks.insert(authority, post_block);
-                if (self.mvba.count_ones() as u64) > committee.quorum_threshold() {
+                if (self.mvba.count_ones() as u64) > self.committee.quorum_threshold() {
                     // note that we don't change the input of the MVBA protocol
                     tracing::info!("MVBA already reached quorum");
                     // return;
@@ -56,6 +60,32 @@ impl ACSManager {
                 }
             }
         }
+    }
+
+    pub fn read_my_post_block_after_round(
+        &self,
+        round: RoundNumber,
+    ) -> Vec<UncertifiedPoSTBlockData> {
+        let mut my_post_blocks = Vec::new();
+        if let Some(my_post_block) =  self.post_blocks.get(&self.authority) {
+            if my_post_block.stuck_round > round && my_post_block.signatures.len() > self.committee.quorum_threshold() as usize {
+                my_post_blocks.push(my_post_block.clone());
+            }
+        }
+        my_post_blocks
+    }
+
+    pub fn read_my_meta_post_block_after_round(
+        &self,
+        round: RoundNumber,
+    ) -> Vec<MetaPoSTBlockData> {
+        let mut my_meta_post_blocks = Vec::new();
+        if let Some(my_post_block) =  self.post_blocks.get(&self.authority) {
+            if my_post_block.stuck_round > round {
+                my_meta_post_blocks.push(my_post_block.get_meta_post_block());
+            }
+        }
+        my_meta_post_blocks
     }
 
     pub fn ready_for_mvba(&self, committee: &Committee) -> bool {
@@ -118,8 +148,16 @@ pub struct PoSTBlockVote {
 }
 
 impl PoSTBlockVote {
-    pub async fn new(meta_post_block: MetaPoSTBlockData, author: PublicKey, signer: Signer) -> Self {
-        let signature= signer.sign_post_block(meta_post_block.stuck_round, meta_post_block.stuck_block(), meta_post_block.seen_blocks());
+    pub async fn new(
+        meta_post_block: MetaPoSTBlockData,
+        author: PublicKey,
+        signer: Signer,
+    ) -> Self {
+        let signature = signer.sign_post_block(
+            meta_post_block.stuck_round,
+            meta_post_block.stuck_block(),
+            meta_post_block.seen_blocks(),
+        );
         Self {
             meta_post_block,
             author,
@@ -138,10 +176,10 @@ impl PoSTBlockVote {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UncertifiedPoSTBlockData {
-    pub stuck_round: RoundNumber,
-    pub stuck_block: Data<StatementBlock>,
+    pub stuck_round: RoundNumber,   // the round I am stuck at
+    pub stuck_block: Data<StatementBlock>,  // the block I proposed at the stuck round
     pub seen_blocks: HashMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
-    pub signatures: Vec<(PublicKey, Signature)>,
+    pub signatures: Vec<(PublicKey, Signature)>,    // 2f+1 signatures
 }
 
 impl UncertifiedPoSTBlockData {
@@ -168,23 +206,11 @@ impl UncertifiedPoSTBlockData {
     }
 
     pub fn get_meta_post_block(&self) -> MetaPoSTBlockData {
-        MetaPoSTBlockData::new(self.stuck_round, self.stuck_block.clone(), self.seen_blocks.clone())
-    }
-
-    pub fn get_stuck_round(&self) -> RoundNumber {
-        self.stuck_round
-    }
-
-    pub fn get_stuck_block(&self) -> &Data<StatementBlock> {
-        &self.stuck_block
-    }
-
-    pub fn get_seen_blocks(&self) -> &HashMap<AuthorityIndex, BlockReference> {
-        &self.seen_blocks
-    }
-
-    pub fn get_signatures(&self) -> &Vec<(PublicKey, Signature)> {
-        &self.signatures
+        MetaPoSTBlockData::new(
+            self.stuck_round,
+            self.stuck_block.clone(),
+            self.seen_blocks.clone(),
+        )
     }
 
     pub fn verify(&self, _committee: &Committee) -> eyre::Result<()> {
