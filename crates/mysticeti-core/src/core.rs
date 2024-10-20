@@ -236,6 +236,7 @@ impl<H: BlockHandler> Core<H> {
                 .expect("ACS manager fails to write post blocks")
                 .add_post_blocks(post_block);
         }
+        // if we receive 2f+1 post blocks, we also create our post block and enter ACS mode
         if self
             .acs_manager
             .read()
@@ -263,7 +264,6 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_post_block_votes");
-        // todo: add votes to the ACS manager, and update own ACS block
         self.acs_manager
             .write()
             .expect("ACS manager fails to write post block votes")

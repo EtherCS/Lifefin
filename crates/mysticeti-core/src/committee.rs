@@ -21,15 +21,8 @@ use crate::{
     data::Data,
     range_map::RangeMap,
     types::{
-        AuthorityIndex,
-        AuthoritySet,
-        BaseStatement,
-        BlockReference,
-        Stake,
-        StatementBlock,
-        TransactionLocator,
-        TransactionLocatorRange,
-        Vote,
+        AuthorityIndex, AuthoritySet, BaseStatement, BlockReference, Stake, StatementBlock,
+        TransactionLocator, TransactionLocatorRange, Vote,
     },
 };
 
@@ -90,6 +83,12 @@ impl Committee {
         self.authorities
             .get(authority as usize)
             .map(Authority::public_key)
+    }
+
+    pub fn known_authority_key(&self, public_key: &PublicKey) -> bool {
+        self.authorities
+            .iter()
+            .any(|a| a.public_key() == public_key)
     }
 
     pub fn known_authority(&self, authority: AuthorityIndex) -> bool {
