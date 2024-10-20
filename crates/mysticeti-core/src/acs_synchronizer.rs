@@ -1,16 +1,13 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use futures::future::join_all;
 use tokio::sync::mpsc;
 
 use crate::{
     acs_manager::{ACSManager, MetaPoSTBlockData, PoSTBlockVote},
-    committee::Committee,
     crypto::{PublicKey, Signer},
     network::NetworkMessage,
     runtime::{Handle, JoinHandle},
@@ -26,6 +23,8 @@ pub struct PoSTBlockDisseminator {
     own_acs_blocks: Option<JoinHandle<Option<()>>>,
     /// The handle of the task disseminating our meta acs block
     own_meta_acs_blocks: Option<JoinHandle<Option<()>>>,
+    /// The current meta post block from this peer
+    last_meta_post_block: Option<MetaPoSTBlockData>,
     /// Signer
     signer: Signer,
 }
@@ -41,6 +40,7 @@ impl PoSTBlockDisseminator {
             sender,
             own_acs_blocks: None,
             own_meta_acs_blocks: None,
+            last_meta_post_block: None,
             signer,
         }
     }
@@ -58,17 +58,30 @@ impl PoSTBlockDisseminator {
         join_all(waiters).await;
     }
 
-    // todo:
-    pub async fn send_vote(
-        &mut self,
-        author: PublicKey,
-        meta_post_block: MetaPoSTBlockData,
-    ) -> Option<()> {
-        let vote = PoSTBlockVote::new(meta_post_block, author, self.signer.clone()).await;
+    // send vote for a valid meta post block
+    pub async fn send_vote(&mut self, author_key: PublicKey, meta_post_block: MetaPoSTBlockData) {
+        // check the validity of the meta post block
+        // verify the stuck round
+        if meta_post_block.stuck_round() < self.acs_manager.read().unwrap().last_acs_round() {
+            tracing::warn!("Received a meta post block with a lower stuck round");
+            return;
+        }
+        // verify if we received an equivocated block
+        if let Some(last_meta_post_block) = &self.last_meta_post_block {
+            if last_meta_post_block.digest() != meta_post_block.digest() {
+                tracing::warn!("Received an equivocated block");
+                return;
+            }
+        }
+        // todo: more verification
+        // 1) for a post block with a round smaller than us, we need to synchronize all missing references to guarantee the data availability
+        // 2) verify last seen blocks
+        self.last_meta_post_block = meta_post_block.clone().into();
+        let vote = PoSTBlockVote::new(meta_post_block, author_key, self.signer.clone()).await;
         self.sender
             .send(NetworkMessage::ProofOfStuckBlockVote(vote))
             .await
-            .ok()
+            .ok();
     }
 
     pub async fn disseminate_own_post_block(&mut self, round: RoundNumber) {

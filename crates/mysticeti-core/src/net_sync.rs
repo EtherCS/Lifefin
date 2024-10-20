@@ -221,6 +221,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             metrics.clone(),
         );
 
+        let my_authority_index = acs_manager.read().unwrap().authority();
         let mut post_block_disseminator =
             PoSTBlockDisseminator::new(acs_manager, connection.sender.clone(), signer);
 
@@ -247,7 +248,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         .await
                 }
                 NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
-                    // todo: handle PoST messages
                     tracing::debug!(
                         "Received post block vote {} from {}",
                         post_block_vote.meta_post_block.stuck_block.reference(),
@@ -264,16 +264,16 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         meta_post_block.stuck_block.reference(),
                         peer
                     );
-                    // todo: sign it
-                    // inner.syncer.add_meta_post_blocks(vec![meta_post_block]).await;
-                    // let authority = connection.peer_id as AuthorityIndex;
-                    // if disseminator
-                    //     .send_vote()
-                    //     .await
-                    //     .is_none()
-                    // {
-                    //     break;
-                    // }
+                    if let Some(author_key) = committee_clone.get_public_key(my_authority_index) {
+                        post_block_disseminator
+                            .send_vote(author_key.clone(), meta_post_block)
+                            .await
+                    } else {
+                        tracing::error!(
+                            "Failed to get public key for authority {}",
+                            my_authority_index
+                        );
+                    }
                 }
                 NetworkMessage::ProofOfStuckBlock(post_block) => {
                     // handle PoST messages
@@ -289,16 +289,16 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                             peer,
                             e
                         );
-                        // Terminate connection upon receiving incorrect block.
-                        break;
+                    } else {
+                        inner.syncer.add_post_blocks(vec![post_block]).await;
                     }
-                    inner.syncer.add_post_blocks(vec![post_block]).await;
                 }
                 NetworkMessage::MVBA(mvba) => {
                     // handle PoST messages
                     tracing::debug!("Received MVBA {} from {}", mvba, peer);
                     // todo: handle MVBA, run FIN ACS protocol
                 }
+                // todo: handle ACS consensus
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
                     if let Err(e) = block.verify(&inner.committee) {
