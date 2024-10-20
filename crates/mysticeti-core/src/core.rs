@@ -12,7 +12,7 @@ use acs::acs_types::ConsensusMode;
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{ACSManager, PoSTBlockVote, MetaPoSTBlockData, UncertifiedPoSTBlockData},
+    acs_manager::{ACSManager, PoSTBlockVote, UncertifiedPoSTBlockData},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -140,7 +140,11 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
-        let acs_manager = Arc::new(RwLock::new(ACSManager::new(authority, (*committee).clone(), 0)));
+        let acs_manager = Arc::new(RwLock::new(ACSManager::new(
+            authority,
+            (*committee).clone(),
+            0,
+        )));
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -232,28 +236,25 @@ impl<H: BlockHandler> Core<H> {
                 .expect("ACS manager fails to write post blocks")
                 .add_post_blocks(post_block);
         }
-        if self.acs_manager.read().expect("ACS manager fails to read").ready_for_mvba(&self.committee)
+        if self
+            .acs_manager
+            .read()
+            .expect("ACS manager fails to read")
+            .ready_for_mvba(&self.committee)
             && self.consensus_mode == ConsensusMode::Optimistic
         {
             // todo: propose own PoST block if haven't done so, and set change the MVBA by including own block
             self.consensus_mode = ConsensusMode::Fallback;
-            let my_post_block = UncertifiedPoSTBlockData::new(
-                self.threshold_clock.get_round(),
-                self.last_own_block.block.clone(),
-                self.last_seen_blocks.clone(),
-                Vec::new(),
-            );
-            self.block_store.create_own_acs_block(my_post_block);
+            self.acs_manager
+                .write()
+                .expect("ACS manager fails to create own block")
+                .create_own_post_block(
+                    self.last_own_block.block.clone().reference().round,
+                    self.last_own_block.block.clone(),
+                    self.last_seen_blocks.clone(),
+                );
             tracing::info!("Switching to Fallback mode");
         }
-    }
-
-    // handle meta PoST blocks received from other authorities here
-    pub fn add_meta_post_blocks(&mut self, blocks: Vec<MetaPoSTBlockData>) {
-        let _timer = self
-            .metrics
-            .utilization_timer
-            .utilization_timer("Core::add_meta_post_blocks");
     }
 
     // handle vote for own ACS block here
@@ -263,11 +264,18 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer
             .utilization_timer("Core::add_post_block_votes");
         // todo: add votes to the ACS manager, and update own ACS block
+        self.acs_manager
+            .write()
+            .expect("ACS manager fails to write post block votes")
+            .add_votes(votes);
     }
 
     pub fn commit_acs(&mut self) {
         self.consensus_mode = ConsensusMode::Optimistic;
-        self.acs_manager.write().expect("ACS manager fails to reset").reset();
+        self.acs_manager
+            .write()
+            .expect("ACS manager fails to reset")
+            .reset();
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {

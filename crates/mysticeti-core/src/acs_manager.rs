@@ -4,7 +4,6 @@ use crate::{
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
-use ed25519_consensus::Signature;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -27,6 +26,19 @@ impl ACSManager {
             round,
             post_blocks: HashMap::new(),
             mvba: 0,
+        }
+    }
+
+    pub fn create_own_post_block(&mut self, round: RoundNumber, last_block: Data<StatementBlock>, last_seen_blocks: HashMap<AuthorityIndex, BlockReference>) {
+        if self.round > round {
+            tracing::error!("The stuck round {} is larger than the current round {}", self.round, round);
+        }
+        // first see if we have already created a PoST block
+        if self.post_blocks.contains_key(&self.authority) {
+            tracing::debug!("PoST block already created");
+        } else {
+            let post_block = UncertifiedPoSTBlockData::new(round, last_block, last_seen_blocks, Vec::new());
+            self.post_blocks.insert(self.authority, post_block);
         }
     }
 
@@ -58,6 +70,29 @@ impl ACSManager {
                     self.mvba |= 1 << authority;
                     // tracing::info!("Number of 1s in mvba: {}", count);
                 }
+            }
+        }
+    }
+
+    pub fn add_votes(&mut self, votes: Vec<PoSTBlockVote>) {
+        for vote in votes {
+            let authority = vote.meta_post_block.stuck_block.reference().authority;
+            if self.post_blocks.contains_key(&authority) {
+                tracing::error!("PoST block from authority {} already received", authority);
+            }
+            let mut post_block = UncertifiedPoSTBlockData::default(authority);
+            post_block.stuck_round = vote.meta_post_block.stuck_round;
+            post_block.stuck_block = vote.meta_post_block.stuck_block;
+            post_block.seen_blocks = vote.meta_post_block.seen_blocks;
+            post_block.signatures.push((vote.author, vote.signature));
+            self.post_blocks.insert(authority, post_block);
+            if (self.mvba.count_ones() as u64) > self.committee.quorum_threshold() {
+                // note that we don't change the input of the MVBA protocol
+                tracing::info!("MVBA already reached quorum");
+                // return;
+            } else {
+                self.mvba |= 1 << authority;
+                // tracing::info!("Number of 1s in mvba: {}", count);
             }
         }
     }
@@ -179,7 +214,7 @@ pub struct UncertifiedPoSTBlockData {
     pub stuck_round: RoundNumber,   // the round I am stuck at
     pub stuck_block: Data<StatementBlock>,  // the block I proposed at the stuck round
     pub seen_blocks: HashMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
-    pub signatures: Vec<(PublicKey, Signature)>,    // 2f+1 signatures
+    pub signatures: Vec<(PublicKey, SignatureBytes)>,    // 2f+1 signatures
 }
 
 impl UncertifiedPoSTBlockData {
@@ -195,7 +230,7 @@ impl UncertifiedPoSTBlockData {
         stuck_round: RoundNumber,
         stuck_block: Data<StatementBlock>,
         seen_blocks: HashMap<AuthorityIndex, BlockReference>,
-        signatures: Vec<(PublicKey, Signature)>,
+        signatures: Vec<(PublicKey, SignatureBytes)>,
     ) -> Self {
         Self {
             stuck_round,

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::HashMap,
     sync::{Arc, RwLock},
 };
 
@@ -15,7 +14,7 @@ use crate::{
     crypto::{PublicKey, Signer},
     network::NetworkMessage,
     runtime::{Handle, JoinHandle},
-    types::{RoundNumber, StatementBlock},
+    types::RoundNumber,
 };
 
 pub struct PoSTBlockDisseminator {
@@ -101,7 +100,7 @@ impl PoSTBlockDisseminator {
     }
 
     /// stream_own_acs_blocks is used to send UncertifiedPoSTBlockData after collecting enough votes
-    /// todo: reliable send
+    /// todo: reliable send (currently, it only sends once)
     async fn stream_own_post_blocks(
         acs_manager: Arc<RwLock<ACSManager>>,
         to: mpsc::Sender<NetworkMessage>,
@@ -110,7 +109,7 @@ impl PoSTBlockDisseminator {
         loop {
             let blocks = acs_manager
                 .read()
-                .expect("fails to read my own acs block")
+                .expect("fails to read my own post block")
                 .read_my_post_block_after_round(round);
             for block in blocks {
                 // let post_block = post_block.clone();
@@ -125,7 +124,7 @@ impl PoSTBlockDisseminator {
     }
 
     /// stream_own_meta_acs_blocks is used to send MetaPoSTBlockData
-    /// todo: reliable send
+    /// todo: reliable send (currently, it only sends once)
     async fn stream_own_meta_post_blocks(
         acs_manager: Arc<RwLock<ACSManager>>,
         to: mpsc::Sender<NetworkMessage>,
@@ -134,7 +133,7 @@ impl PoSTBlockDisseminator {
         loop {
             let meta_blocks = acs_manager
                 .read()
-                .expect("fails to read my own acs block")
+                .expect("fails to read my own meta post block")
                 .read_my_meta_post_block_after_round(round);
             for meta_block in meta_blocks {
                 // let post_block = post_block.clone();

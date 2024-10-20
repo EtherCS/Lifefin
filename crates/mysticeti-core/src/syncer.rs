@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{PoSTBlockVote, MetaPoSTBlockData, UncertifiedPoSTBlockData},
+    acs_manager::{PoSTBlockVote, UncertifiedPoSTBlockData},
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
@@ -87,14 +87,6 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .utilization_timer
             .utilization_timer("Syncer::add_post_blocks");
         self.core.add_post_blocks(blocks);
-    }
-
-    pub fn add_meta_post_blocks(&mut self, meta_blocks: Vec<MetaPoSTBlockData>) {
-        let _timer = self
-            .metrics
-            .utilization_timer
-            .utilization_timer("Syncer::add_meta_post_blocks");
-        self.core.add_meta_post_blocks(meta_blocks);
     }
 
     pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
