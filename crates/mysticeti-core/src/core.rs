@@ -200,6 +200,10 @@ impl<H: BlockHandler> Core<H> {
 
     // Note that generally when you update this function you also want to change genesis initialization above
     pub fn add_blocks(&mut self, blocks: Vec<Data<StatementBlock>>) -> Vec<Data<StatementBlock>> {
+        // if we are in fallback mode, we don't add any blocks
+        if self.consensus_mode == ConsensusMode::Fallback {
+            return vec![];
+        }
         let _timer = self
             .metrics
             .utilization_timer
@@ -303,6 +307,10 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn try_new_block(&mut self) -> Option<Data<StatementBlock>> {
+        // if we are in fallback mode, we don't create any blocks
+        if self.consensus_mode == ConsensusMode::Fallback {
+            return None;
+        }
         let _timer = self
             .metrics
             .utilization_timer
