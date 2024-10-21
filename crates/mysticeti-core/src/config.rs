@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    fs,
-    io,
+    fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
@@ -53,6 +52,8 @@ pub struct NodeParameters {
     pub consensus_only: bool,
     #[serde(default = "node_defaults::default_enable_synchronizer")]
     pub enable_synchronizer: bool,
+    #[serde(default = "node_defaults::default_acs_timeout")]
+    pub acs_timeout: Duration,
     #[serde(default = "node_defaults::default_attack_type")]
     pub attack_type: AttackType,
 }
@@ -94,6 +95,10 @@ pub mod node_defaults {
         false
     }
 
+    pub fn default_acs_timeout() -> std::time::Duration {
+        std::time::Duration::from_secs(600)
+    }
+
     pub fn default_attack_type() -> acs::adversary::AttackType {
         acs::adversary::AttackType::Honest
     }
@@ -111,6 +116,7 @@ impl Default for NodeParameters {
             enable_pipelining: node_defaults::default_enable_pipelining(),
             consensus_only: node_defaults::default_consensus_only(),
             enable_synchronizer: node_defaults::default_enable_synchronizer(),
+            acs_timeout: node_defaults::default_acs_timeout(),
             attack_type: node_defaults::default_attack_type(),
         }
     }
@@ -123,8 +129,14 @@ impl NodeParameters {
         self.number_of_leaders = number_of_leaders;
         self
     }
+
     pub fn with_attack_type(mut self, attack_type: AttackType) -> Self {
         self.attack_type = attack_type;
+        self
+    }
+
+    pub fn with_acs_timeout(mut self, timeout: Duration) -> Self {
+        self.acs_timeout = timeout;
         self
     }
 }

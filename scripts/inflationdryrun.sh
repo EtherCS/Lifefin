@@ -5,6 +5,15 @@
 
 export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG
 
+# Change to the previous directory
+cd ..
+
+# Execute cargo build
+cargo build
+
+# Return to the original directory
+cd -
+
 tmux kill-server || true
 
 tmux new -d -s "v0" "cargo run --bin mysticeti -- dry-attack-run --committee-size 4 --authority 0 --attack-type 0 > attack.v0.log.ansi"

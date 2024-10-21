@@ -4,7 +4,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     mem,
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    sync::{atomic::AtomicU64, Arc, RwLock}, time::{Duration, Instant},
 };
 
 use acs::acs_types::ConsensusMode;
@@ -58,6 +58,8 @@ pub struct Core<H: BlockHandler> {
     consensus_mode: ConsensusMode,
     acs_manager: Arc<RwLock<ACSManager>>,
     last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
+    acs_timeout: Duration,
+    last_commit_time: Instant,
 }
 
 pub struct CoreOptions {
@@ -176,6 +178,8 @@ impl<H: BlockHandler> Core<H> {
             consensus_mode: ConsensusMode::Optimistic,
             acs_manager,
             last_seen_blocks,
+            acs_timeout: public_config.parameters.acs_timeout,
+            last_commit_time: Instant::now(),
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -244,20 +248,22 @@ impl<H: BlockHandler> Core<H> {
             .ready_for_mvba(&self.committee)
             && self.consensus_mode == ConsensusMode::Optimistic
         {
-            // todo: propose own PoST block if haven't done so, and set change the MVBA by including own block
-            self.consensus_mode = ConsensusMode::Fallback;
-            self.acs_manager
-                .write()
-                .expect("ACS manager fails to create own block")
-                .create_own_post_block(
-                    self.last_own_block.block.clone().reference().round,
-                    self.last_own_block.block.clone(),
-                    self.last_seen_blocks.clone(),
-                );
-            tracing::info!("Switching to Fallback mode");
+            self.switch_to_fallback();
         }
     }
 
+    fn switch_to_fallback(&mut self) {
+        self.consensus_mode = ConsensusMode::Fallback;
+        self.acs_manager
+            .write()
+            .expect("ACS manager fails to create own block")
+            .create_own_post_block(
+                self.last_own_block.block.clone().reference().round,
+                self.last_own_block.block.clone(),
+                self.last_seen_blocks.clone(),
+            );
+        tracing::info!("Switching to Fallback mode");
+    }
     // handle vote for own ACS block here
     pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
         let _timer = self
@@ -426,12 +432,22 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn try_commit(&mut self) -> Vec<Data<StatementBlock>> {
+        let start = Instant::now();
         let sequence: Vec<_> = self
             .committer
             .try_commit(self.last_commit_leader)
             .into_iter()
             .filter_map(|leader| leader.into_decided_block())
             .collect();
+
+        if sequence.is_empty() {
+            if start - self.last_commit_time > self.acs_timeout && self.consensus_mode == ConsensusMode::Optimistic {
+                tracing::info!("ACS timeout {:?} reached {:?}, switching to MVBA", self.acs_timeout, start - self.last_commit_time);
+                self.switch_to_fallback();
+            } 
+        } else {
+            self.last_commit_time = start;
+        }
 
         if let Some(last) = sequence.last() {
             self.last_commit_leader = *last.reference();
