@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{PoSTBlockVote, UncertifiedPoSTBlockData},
+    acs_manager::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
@@ -81,7 +81,7 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
         }
     }
 
-    pub fn add_post_blocks(&mut self, blocks: Vec<UncertifiedPoSTBlockData>) {
+    pub fn add_post_blocks(&mut self, blocks: Vec<CertifiedPoSTBlockData>) {
         let _timer = self
             .metrics
             .utilization_timer
@@ -95,6 +95,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .utilization_timer
             .utilization_timer("Syncer::add_post_block_votes");
         self.core.add_post_block_votes(votes);
+    }
+
+    pub fn add_certified_mvba(&mut self, mvbas: Vec<ReliableMVBA>) {
+        // todo: verify and add mvba to self.acs_fin
     }
 
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {

@@ -22,7 +22,10 @@ use tokio::{
 };
 
 use crate::{
-    acs_manager::{MetaPoSTBlockData, PoSTBlockVote, UncertifiedPoSTBlockData, MVBA},
+    acs_manager::{
+        PoSTBlockVote, ReliableMVBA, ReliableMVBAProposal,
+        CertifiedPoSTBlockData,
+    },
     config::NodePublicConfig,
     data::Data,
     metrics::{print_network_address_table, Metrics},
@@ -33,20 +36,18 @@ use crate::{
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum NetworkMessage {
     SubscribeOwnFrom(RoundNumber), // subscribe from round number excluding
-    SubscribeOwnPoSTBlockAfter(RoundNumber), // subscribe post block after round number
-    SubscribeOwnMetaPoSTBlockAfter(RoundNumber), // subscribe meta post block after round number
     Block(Data<StatementBlock>),
     /// Request a few specific block references (this is not indented for large requests).
     RequestBlocks(Vec<BlockReference>),
     /// Indicate that a requested block is not found.
     BlockNotFound(Vec<BlockReference>),
-    MetaProofOfStuckBlock(MetaPoSTBlockData),
     ProofOfStuckBlockVote(PoSTBlockVote),
-    ProofOfStuckBlock(UncertifiedPoSTBlockData),
-    MVBA(MVBA),
+    ProofOfStuckBlock(CertifiedPoSTBlockData),
+    MVBAProposal(ReliableMVBAProposal),
+    CertifiedMVBA(ReliableMVBA),
 }
 
 pub struct Network {

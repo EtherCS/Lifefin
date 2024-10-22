@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc, thread};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    acs_manager::{PoSTBlockVote, UncertifiedPoSTBlockData},
+    acs_manager::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
     block_handler::BlockHandler,
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},
@@ -35,8 +35,9 @@ enum CoreThreadCommand {
     ConnectionEstablished(AuthorityIndex, oneshot::Sender<()>),
     /// Indicate that a connection to an authority was dropped.
     ConnectionDropped(AuthorityIndex, oneshot::Sender<()>),
-    AddPoSTBlocks(Vec<UncertifiedPoSTBlockData>, oneshot::Sender<()>),
+    AddPoSTBlocks(Vec<CertifiedPoSTBlockData>, oneshot::Sender<()>),
     AddPoSTBlockVotes(Vec<PoSTBlockVote>, oneshot::Sender<()>),
+    AddCertifiedMVBA(Vec<ReliableMVBA>, oneshot::Sender<()>),
 }
 
 impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 'static>
@@ -69,7 +70,7 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
         receiver.await.expect("core thread is not expected to stop");
     }
 
-    pub async fn add_post_blocks(&self, blocks: Vec<UncertifiedPoSTBlockData>) {
+    pub async fn add_post_blocks(&self, blocks: Vec<CertifiedPoSTBlockData>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddPoSTBlocks(blocks, sender))
             .await;
@@ -79,6 +80,13 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
     pub async fn add_post_block_votes(&self, votes: Vec<PoSTBlockVote>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddPoSTBlockVotes(votes, sender))
+            .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_certified_mvba(&self, mvbas: Vec<ReliableMVBA>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddCertifiedMVBA(mvbas, sender))
             .await;
         receiver.await.expect("core thread is not expected to stop");
     }
@@ -159,8 +167,12 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                     self.syncer.add_post_blocks(post_blocks);
                     sender.send(()).ok();
                 }
-                CoreThreadCommand::AddPoSTBlockVotes(post_block_votes, sender, ) => {
+                CoreThreadCommand::AddPoSTBlockVotes(post_block_votes, sender) => {
                     self.syncer.add_post_block_votes(post_block_votes);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddCertifiedMVBA(certified_mvbas, sender) => {
+                    self.syncer.add_certified_mvba(certified_mvbas);
                     sender.send(()).ok();
                 }
             }
