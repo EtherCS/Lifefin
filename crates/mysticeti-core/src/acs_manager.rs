@@ -1,8 +1,8 @@
 use crate::{
     committee::Committee,
-    crypto::{MetaPoSTBlockDigest, PublicKey, SignatureBytes, Signer},
+    crypto::{MetaPoSTBlockDigest, PublicKey, ReliableMVBADigest, SignatureBytes, Signer},
     data::Data,
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
 use eyre::Ok;
 use serde::{Deserialize, Serialize};
@@ -11,22 +11,98 @@ use std::collections::HashMap;
 
 pub type MVBA = u128;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReliableMVBAProposal {
+    pub authority: AuthorityIndex,
+    pub round: RoundNumber, // the last round agreed by the ACS mode
+    pub proposal: MVBA,
+    pub signature: SignatureBytes, // my signature on this mvba proposal
+}
+
+impl ReliableMVBAProposal {
+    pub fn new_with_signer(
+        authority: AuthorityIndex,
+        round: RoundNumber,
+        proposal: MVBA,
+        signer: Signer,
+    ) -> Self {
+        let signature = signer.sign_mvba_proposal(authority, round, proposal);
+        Self {
+            authority,
+            round,
+            proposal,
+            signature,
+        }
+    }
+
+    pub fn digest(&self) -> ReliableMVBADigest {
+        ReliableMVBADigest::new(self.authority, self.round, self.proposal)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReliableMVBA {
+    pub authority: AuthorityIndex,
+    pub round: RoundNumber, // the last round agreed by the ACS mode
+    pub proposal: MVBA, // the proposal value
+    pub signatures: Vec<(PublicKey, SignatureBytes)>, // 2f+1 signatures
+}
+
+impl ReliableMVBA {
+    pub fn new(authority: AuthorityIndex, round: RoundNumber, proposal: MVBA) -> Self {
+        Self {
+            authority,
+            round,
+            proposal,
+            signatures: Vec::new(),
+        }
+    }
+
+    pub fn update_signature(&mut self, author: PublicKey, signature: SignatureBytes) {
+        if !self.signatures.iter().any(|(a, _)| a == &author) {
+            self.signatures.push((author, signature));
+        }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
+        if self.signatures.len() < committee.quorum_threshold() as usize {
+            eyre::bail!("Not enough signatures");
+        }
+        for (author, signature) in &self.signatures {
+            if !committee.known_authority_key(author) {
+                eyre::bail!("Unknown authority");
+            }
+            if author
+                .verify_reliable_mvba_with_signature(self, signature)
+                .is_err()
+            {
+                eyre::bail!("Invalid signature");
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct ACSManager {
     authority: AuthorityIndex,
-    committee: Committee,
+    public_key: PublicKey,
+    committee: Committee, // for verification
     round: RoundNumber, // the last round agreed by the ACS mode
-    post_blocks: HashMap<AuthorityIndex, UncertifiedPoSTBlockData>,
-    mvba: MVBA, // the MVBA proposal of the node
+    last_seen_meta_post_blocks: HashMap<AuthorityIndex, MetaPoSTBlockData>,
+    post_blocks: HashMap<AuthorityIndex, CertifiedPoSTBlockData>,
+    mvba: ReliableMVBA, // the MVBA proposal of the node
 }
 
 impl ACSManager {
-    pub fn new(authority: AuthorityIndex, committee: Committee, round: RoundNumber) -> Self {
+    pub fn new(authority: AuthorityIndex, public_key: PublicKey, committee: Committee, round: RoundNumber) -> Self {
         Self {
             authority,
+            public_key,
             committee,
             round,
+            last_seen_meta_post_blocks: HashMap::new(),
             post_blocks: HashMap::new(),
-            mvba: 0,
+            mvba: ReliableMVBA::new(authority, round, 0),
         }
     }
 
@@ -35,10 +111,10 @@ impl ACSManager {
         round: RoundNumber,
         last_block: Data<StatementBlock>,
         last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
-    ) {
+    ) -> CertifiedPoSTBlockData {
         if self.round > round {
             tracing::error!(
-                "The stuck round {} is larger than the current round {}",
+                "The last ACS round {} is larger than the current round {}",
                 self.round,
                 round
             );
@@ -46,14 +122,16 @@ impl ACSManager {
         // first see if we have already created a PoST block
         if self.post_blocks.contains_key(&self.authority) {
             tracing::debug!("PoST block already created");
+            return self.post_blocks.get(&self.authority).unwrap().clone();
         } else {
             let post_block =
-                UncertifiedPoSTBlockData::new(round, last_block, last_seen_blocks, Vec::new());
-            self.post_blocks.insert(self.authority, post_block);
+                CertifiedPoSTBlockData::new(round, last_block, last_seen_blocks, Vec::new());
+            self.post_blocks.insert(self.authority, post_block.clone());
+            return post_block;
         }
     }
 
-    pub fn add_post_blocks(&mut self, post_block: UncertifiedPoSTBlockData) {
+    pub fn add_post_block(&mut self, post_block: CertifiedPoSTBlockData, acs_quorum: Stake) {
         match post_block.stuck_round.cmp(&self.round) {
             // ignore a PoST block with a round less than or equal to the last ACS round
             Ordering::Less | Ordering::Equal => {}
@@ -73,78 +151,174 @@ impl ACSManager {
                     return;
                 }
                 self.post_blocks.insert(authority, post_block);
-                if (self.mvba.count_ones() as u64) > self.committee.quorum_threshold() {
+                if (self.mvba.proposal.count_ones() as u64) > acs_quorum {
                     // note that we don't change the input of the MVBA protocol
                     tracing::info!("MVBA already reached quorum");
                     // return;
                 } else {
-                    self.mvba |= 1 << authority;
+                    self.mvba.proposal |= 1 << authority;
                     // tracing::info!("Number of 1s in mvba: {}", count);
                 }
             }
         }
     }
 
-    pub fn add_votes(&mut self, votes: Vec<PoSTBlockVote>) {
-        for vote in votes {
-            if let Some(post_block) = self.post_blocks.get_mut(&self.authority) {
-                // check if the vote is for our own PoST block
-                if post_block.get_meta_post_block().digest() == vote.meta_post_block.digest() {
-                    // verify the signature
-                    if let Err(e) = vote.author.verify_post_block_vote(&vote) {
-                        tracing::warn!("Rejected incorrect PoST block vote: {:?}", e);
-                        continue;
+    fn add_meta_post_block(&mut self, meta_post_block: MetaPoSTBlockData) -> bool {
+        match meta_post_block.stuck_round.cmp(&self.round) {
+            // ignore a PoST block with a round less than or equal to the last ACS round
+            Ordering::Less | Ordering::Equal => {
+                return false;
+            }
+            // receive a new PoST block
+            Ordering::Greater => {
+                let authority = meta_post_block.stuck_block.reference().authority;
+                // todo: we currently only support 128 authorities
+                if authority > 128 {
+                    tracing::error!(
+                        "The authority index {} is too large (maximum is 128)",
+                        authority
+                    );
+                    return false;
+                }
+                if let Some(meta) =  self.last_seen_meta_post_blocks.get(&authority) {
+                    if meta.digest() == meta_post_block.digest() {
+                        // this is legal meta post block
+                        tracing::debug!("PoST block from authority {} already received", authority);
+                        return true;
+                    } else {
+                        // this is illegal meta post block
+                        tracing::debug!("PoST block from authority {} is illegal", authority);
+                        return false;
                     }
-                    // add the signature to the PoST block
-                    post_block.update_signature(vote.author, vote.signature);
+                } else {
+                    self.last_seen_meta_post_blocks.insert(authority, meta_post_block);
+                    return true;
                 }
             }
         }
     }
 
-    pub fn read_my_post_block_after_round(
-        &self,
-        round: RoundNumber,
-    ) -> Vec<UncertifiedPoSTBlockData> {
-        let mut my_post_blocks = Vec::new();
-        if let Some(my_post_block) = self.post_blocks.get(&self.authority) {
-            if my_post_block.stuck_round > round
-                && my_post_block.signatures.len() > self.committee.quorum_threshold() as usize
-            {
-                my_post_blocks.push(my_post_block.clone());
+    /// this function handle:
+    /// 1) vote for our post block
+    /// 2) votes servicing as a meta post block from other peers
+    pub fn add_votes(&mut self, votes: Vec<PoSTBlockVote>, acs_quorum: Stake) -> Vec<CertifiedPoSTBlockData> {
+        let mut return_post_blocks = Vec::new();
+        for vote in votes {
+            // verify the signature
+            if let Err(e) = vote.author.verify_post_block_vote(&vote) {
+                tracing::warn!("Rejected incorrect PoST block vote: {:?}", e);
+                continue;
             }
+            let vote_public_key = vote.author.clone();
+            if !self.committee.known_authority_key(&vote_public_key) {
+                tracing::warn!("Unknown public key");
+            } else {
+                if vote_public_key == self.public_key {
+                    // we handle vote for ourself
+                    if let Some(post_block) = self.post_blocks.get_mut(&self.authority) {
+                        // check if the vote is for our own PoST block
+                        if post_block.get_meta_post_block().digest() == vote.meta_post_block.digest() {
+                            // if we already have enough signatures, ignore the vote to avoid different PoST blocks
+                            if post_block.signatures.len() > acs_quorum as usize {
+                                continue;
+                            }
+                            // add the signature to the PoST block
+                            post_block.update_signature(vote.author, vote.signature);
+                            if post_block.signatures.len() > acs_quorum as usize {
+                                return_post_blocks.push(post_block.clone());
+                                // own PoST block is certified
+                                if (self.mvba.proposal.count_ones() as u64) > acs_quorum {
+                                    // note that we don't change the input of the MVBA protocol
+                                    tracing::info!("MVBA already reached quorum");
+                                    // return;
+                                } else {
+                                    self.mvba.proposal |= 1 << self.authority;
+                                    // tracing::info!("Number of 1s in mvba: {}", count);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // we handle meta post block from other peer
+                    if self.add_meta_post_block(vote.meta_post_block.clone()) {
+                        // this meta post block is valid
+                        let peer_post_block = CertifiedPoSTBlockData::new(vote.meta_post_block.stuck_round, vote.meta_post_block.stuck_block, vote.meta_post_block.seen_blocks, Vec::new());
+                        return_post_blocks.push(peer_post_block);
+                    }
+                }
+            }
+            
         }
-        my_post_blocks
+        return_post_blocks
     }
 
-    pub fn read_my_meta_post_block_after_round(
-        &self,
-        round: RoundNumber,
-    ) -> Vec<MetaPoSTBlockData> {
-        let mut my_meta_post_blocks = Vec::new();
-        if let Some(my_post_block) = self.post_blocks.get(&self.authority) {
-            if my_post_block.stuck_round > round {
-                my_meta_post_blocks.push(my_post_block.get_meta_post_block());
-            }
-        }
-        my_meta_post_blocks
-    }
+    // pub fn read_my_post_block_after_round(
+    //     &self,
+    //     round: RoundNumber,
+    //     acs_quorum: Stake,
+    // ) -> Vec<CertifiedPoSTBlockData> {
+    //     let mut my_post_blocks = Vec::new();
+    //     if let Some(my_post_block) = self.post_blocks.get(&self.authority) {
+    //         if my_post_block.stuck_round > round
+    //             && my_post_block.signatures.len() > acs_quorum as usize
+    //         {
+    //             my_post_blocks.push(my_post_block.clone());
+    //         }
+    //     }
+    //     my_post_blocks
+    // }
+
+    // pub fn read_my_meta_post_block_after_round(
+    //     &self,
+    //     round: RoundNumber,
+    // ) -> Vec<MetaPoSTBlockData> {
+    //     let mut my_meta_post_blocks = Vec::new();
+    //     if let Some(my_post_block) = self.post_blocks.get(&self.authority) {
+    //         if my_post_block.stuck_round > round {
+    //             my_meta_post_blocks.push(my_post_block.get_meta_post_block());
+    //         }
+    //     }
+    //     my_meta_post_blocks
+    // }
+
+    // pub fn read_my_uncertified_mvba_after_round(
+    //     &self,
+    //     round: RoundNumber,
+    // ) -> Vec<ReliableMVBAProposal> {
+    //     let mut my_uncertified_mvbas = Vec::new();
+    //     // todo
+    //     // if let Some(my_post_block) = self.post_blocks.get(&self.authority) {
+    //     //     if my_post_block.stuck_round > round {
+    //     //         my_meta_post_blocks.push(my_post_block.get_meta_post_block());
+    //     //     }
+    //     // }
+    //     my_uncertified_mvbas
+    // }
+
+    // pub fn read_my_certified_mvba_after_round(
+    //     &self,
+    //     round: RoundNumber,
+    // ) -> Vec<ReliableMVBA> {
+    //     let mut my_certified_mvbas = Vec::new();
+    //     // todo
+    //     // if let Some(my_post_block) = self.post_blocks.get(&self.authority) {
+    //     //     if my_post_block.stuck_round > round {
+    //     //         my_meta_post_blocks.push(my_post_block.get_meta_post_block());
+    //     //     }
+    //     // }
+    //     my_certified_mvbas
+    // }
 
     pub fn ready_for_mvba(&self, committee: &Committee) -> bool {
-        (self.mvba.count_ones() as u64) > committee.quorum_threshold()
-    }
-
-    // this function just for test
-    pub fn set_mvba(&mut self, mvba: MVBA) {
-        self.mvba = mvba;
-    }
-
-    pub fn mvba(&self) -> MVBA {
-        self.mvba
+        (self.mvba.proposal.count_ones() as u64) > committee.quorum_threshold()
     }
 
     pub fn authority(&self) -> AuthorityIndex {
         self.authority
+    }
+
+    pub fn public_key(&self) -> PublicKey {
+        self.public_key.clone()
     }
 
     pub fn last_acs_round(&self) -> RoundNumber {
@@ -153,7 +327,8 @@ impl ACSManager {
 
     pub fn reset(&mut self) {
         self.post_blocks.clear();
-        self.mvba = 0;
+        // todo 
+        // self.mvba = 0;
     }
 }
 
@@ -204,7 +379,7 @@ pub struct PoSTBlockVote {
 }
 
 impl PoSTBlockVote {
-    pub async fn new(
+    pub fn new(
         meta_post_block: MetaPoSTBlockData,
         author: PublicKey,
         signer: Signer,
@@ -231,14 +406,14 @@ impl PoSTBlockVote {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UncertifiedPoSTBlockData {
+pub struct CertifiedPoSTBlockData {
     pub stuck_round: RoundNumber,          // the round I am stuck at
     pub stuck_block: Data<StatementBlock>, // the block I proposed at the stuck round
     pub seen_blocks: HashMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
     pub signatures: Vec<(PublicKey, SignatureBytes)>, // 2f+1 signatures
 }
 
-impl UncertifiedPoSTBlockData {
+impl CertifiedPoSTBlockData {
     pub fn default(authority: AuthorityIndex) -> Self {
         Self {
             stuck_round: 0,

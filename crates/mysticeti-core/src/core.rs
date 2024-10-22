@@ -3,7 +3,6 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    hash::Hash,
     mem,
     sync::{atomic::AtomicU64, Arc, RwLock},
     time::{Duration, Instant},
@@ -15,7 +14,7 @@ use minibytes::Bytes;
 
 use crate::{
     acs_manager::{
-        ACSManager, PoSTBlockVote, ReliableMVBA, ReliableMVBAProposal, UncertifiedPoSTBlockData,
+        ACSManager, CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA
     },
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -33,11 +32,11 @@ use crate::{
     data::Data,
     epoch_close::EpochManager,
     metrics::{Metrics, UtilizationTimerVecExt},
-    network::{Connection, NetworkMessage},
+    network::NetworkMessage,
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock},
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 use tokio::runtime::Runtime;
@@ -62,6 +61,8 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
+    // Here are our defined structures for ACS mode
+    acs_quorum: Stake,
     consensus_mode: ConsensusMode,
     acs_manager: Arc<RwLock<ACSManager>>,
     last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
@@ -150,8 +151,12 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
+        // acs_quorum = 2/3
+        let acs_quorum = (*committee).clone().quorum_threshold();
+        let public_key = committee.get_public_key(authority);
         let acs_manager = Arc::new(RwLock::new(ACSManager::new(
             authority,
+            public_key.unwrap().clone(),
             (*committee).clone(),
             0,
         )));
@@ -183,6 +188,7 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
+            acs_quorum,
             consensus_mode: ConsensusMode::Optimistic,
             acs_manager,
             last_seen_blocks,
@@ -232,9 +238,6 @@ impl<H: BlockHandler> Core<H> {
 
     // Note that generally when you update this function you also want to change genesis initialization above
     pub fn add_blocks(&mut self, blocks: Vec<Data<StatementBlock>>) -> Vec<Data<StatementBlock>> {
-        // tracing::debug!("the number of connections is {}", self.network_connections.read().unwrap().len());
-        let rt = Runtime::new().unwrap();
-        rt.block_on(self.test_connections());
         let _timer = self
             .metrics
             .utilization_timer
@@ -264,7 +267,7 @@ impl<H: BlockHandler> Core<H> {
         result
     }
 
-    pub fn add_post_blocks(&mut self, blocks: Vec<UncertifiedPoSTBlockData>) {
+    pub fn add_post_blocks(&mut self, blocks: Vec<CertifiedPoSTBlockData>) {
         let _timer = self
             .metrics
             .utilization_timer
@@ -273,7 +276,7 @@ impl<H: BlockHandler> Core<H> {
             self.acs_manager
                 .write()
                 .expect("ACS manager fails to write post blocks")
-                .add_post_blocks(post_block);
+                .add_post_block(post_block, self.acs_quorum);
         }
         // if we receive 2f+1 post blocks, we also create our post block and enter ACS mode
         if self
@@ -287,8 +290,53 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
+    // pub fn add_meta_post_blocks(&mut self, meta_blocks: Vec<MetaPoSTBlockData>) {
+    //     let _timer = self
+    //         .metrics
+    //         .utilization_timer
+    //         .utilization_timer("Core::add_meta_post_blocks");
+    //     for meta_block in meta_blocks {
+    //         // check if we receive equvocated meta post block (make sure not sign two post blocks)
+    //         if self.acs_manager.write().expect("ACS manager fails to write").add_meta_post_block(meta_block.clone()) {
+    //             let public_key = self.acs_manager.read().expect("Fail to read acs manager").public_key();
+    //             let vote = PoSTBlockVote::new(meta_block, public_key, self.signer.clone());
+    //         }
+    //     }
+    // }
+
+    // handle vote for own ACS block here
+    pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_post_block_votes");
+        let new_post_blocks = self.acs_manager
+            .write()
+            .expect("ACS manager fails to write post block votes")
+            .add_votes(votes, self.acs_quorum);
+        // if we just received enough votes for a new own post block, broadcast it
+        for new_post_block in new_post_blocks {
+            let rt = Runtime::new().unwrap();
+            let peer = new_post_block.stuck_block.author();
+            if peer == self.authority {
+                // this is our post block
+                rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(new_post_block.clone())));
+            } else {
+                // this is a vote from other peer
+                let public_key = self.acs_manager.read().expect("Fail to read acs manager").public_key();
+                let vote = PoSTBlockVote::new(new_post_block.get_meta_post_block(), public_key, self.signer.clone());
+                rt.block_on(self.send_peer(peer, NetworkMessage::ProofOfStuckBlockVote(vote)));
+            }
+        }
+    }
+
+    /// We switch to fallback mode if one of the following conditions is met:
+    /// 1) receive 2f+1 post blocks
+    /// 2) trigger acs timeout (which could be very long, said 10 minutes, in practice)
+    /// 3) todo: almost run out of memory 
     fn switch_to_fallback(&mut self) {
-        self.acs_manager
+        // create own certified post block
+        let my_certified_post_block = self.acs_manager
             .write()
             .expect("ACS manager fails to create own block")
             .create_own_post_block(
@@ -296,19 +344,19 @@ impl<H: BlockHandler> Core<H> {
                 self.last_own_block.block.clone(),
                 self.last_seen_blocks.clone(),
             );
+        // we use tokio::runtime::Runtime to support calling async function in sync function
+        let rt = Runtime::new().unwrap();
+        if (my_certified_post_block.signatures.len() as Stake) > self.acs_quorum {
+            // broadcast the certified post block if we have enough signatures
+            rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(my_certified_post_block.clone())));
+        } else {
+            // broadcast the post block vote (meta + signature) if we don't have enough signatures
+            let public_key = self.acs_manager.read().expect("Fail to read acs manager").public_key();
+            let vote = PoSTBlockVote::new(my_certified_post_block.clone().get_meta_post_block(), public_key, self.signer.clone());
+            rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlockVote(vote)));
+        }
         tracing::info!("Switching to Fallback mode");
         self.consensus_mode = ConsensusMode::Fallback;
-    }
-    // handle vote for own ACS block here
-    pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
-        let _timer = self
-            .metrics
-            .utilization_timer
-            .utilization_timer("Core::add_post_block_votes");
-        self.acs_manager
-            .write()
-            .expect("ACS manager fails to write post block votes")
-            .add_votes(votes);
     }
 
     pub fn commit_acs(&mut self) {
@@ -634,6 +682,21 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn acs_manager(&self) -> Arc<RwLock<ACSManager>> {
         Arc::clone(&self.acs_manager)
+    }
+
+    /// We implement network communication for core here:
+    pub async fn broadcast(&self, message: NetworkMessage) {
+        let connections = self.network_connections.read().unwrap();
+        for (_, c) in connections.iter() {
+            let _ = c.send(message.clone()).await;
+        }
+    }
+
+    pub async fn send_peer(&self, peer: AuthorityIndex, message: NetworkMessage) {
+        let connections = self.network_connections.read().unwrap();
+        if let Some(c) = connections.get(&peer) {
+            let _ = c.send(message).await;
+        }
     }
 }
 
