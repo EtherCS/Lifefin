@@ -125,7 +125,7 @@ impl Validator {
             public_config.parameters.shutdown_grace_period,
             metrics,
             &public_config,
-            private_config.clone(),
+            // private_config.clone(),
         );
 
         tracing::info!("Validator {authority} listening on {network_address}");
