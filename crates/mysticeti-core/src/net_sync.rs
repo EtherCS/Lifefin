@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    acs_manager::ACSManager,
+    acs_manager::{ACSManager, ReliableMVBA, ReliableMVBAProposal},
     acs_synchronizer::PoSTBlockDisseminator,
     block_handler::BlockHandler,
     block_store::BlockStore,
@@ -76,6 +76,8 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         let block_store = core.block_store().clone();
         let epoch_closing_time = core.epoch_closing_time();
         let acs_manager = core.acs_manager();
+        let core_connections = Arc::new(RwLock::new(HashMap::new()));
+        core.set_connections(Arc::clone(&core_connections));
         let mut syncer = Syncer::new(
             core,
             commit_period,
@@ -104,6 +106,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             metrics.clone(),
             public_config.parameters.enable_synchronizer,
         ));
+
         let main_task = handle.spawn(Self::run(
             network,
             inner.clone(),
@@ -113,6 +116,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             metrics.clone(),
             private_config,
             acs_manager,
+            Arc::clone(&core_connections),
         ));
         let syncer_task = AsyncWalSyncer::start(wal_syncer, stop_sender, epoch_sender);
         Self {
@@ -143,6 +147,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         metrics: Arc<Metrics>,
         private_config: NodePrivateConfig,
         acs_manager: Arc<RwLock<ACSManager>>,
+        core_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
     ) {
         let mut connections: HashMap<usize, JoinHandle<Option<()>>> = HashMap::new();
         let handle = Handle::current();
@@ -162,7 +167,8 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             let sender = connection.sender.clone();
             let authority = peer_id as AuthorityIndex;
             block_fetcher.register_authority(authority, sender).await;
-
+            // add connection to core
+            // core_connections.write().unwrap().insert(authority, connection.sender.clone());
             let task = handle.spawn(Self::connection_task(
                 connection,
                 inner.clone(),
@@ -170,6 +176,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 metrics.clone(),
                 private_config.clone(),
                 Arc::clone(&acs_manager),
+                Arc::clone(&core_connections),
             ));
             connections.insert(peer_id, task);
         }
@@ -192,6 +199,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         metrics: Arc<Metrics>,
         private_config: NodePrivateConfig,
         acs_manager: Arc<RwLock<ACSManager>>,
+        core_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
     ) -> Option<()> {
         let last_seen = inner
             .block_store
@@ -213,6 +221,18 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .send(NetworkMessage::SubscribeOwnMetaPoSTBlockAfter(0))
             .await
             .ok()?;
+        // subscribe to own mvba proposals
+        connection
+            .sender
+            .send(NetworkMessage::SubscribeOwnMVBAProposalAfter(0))
+            .await
+            .ok()?;
+        // subscribe to own certified mvba
+        connection
+            .sender
+            .send(NetworkMessage::SubscribeOwnCertifiedMVBAAfter(0))
+            .await
+            .ok()?;
         let signer = private_config.keypair;
         let mut disseminator = BlockDisseminator::new(
             connection.sender.clone(),
@@ -227,6 +247,10 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
 
         let id = connection.peer_id as AuthorityIndex;
         inner.syncer.authority_connection(id, true).await;
+        core_connections
+            .write()
+            .unwrap()
+            .insert(id, connection.sender.clone());
 
         let peer = format_authority_index(id);
         let committee_clone = (*inner.committee).clone();
@@ -245,6 +269,16 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 NetworkMessage::SubscribeOwnMetaPoSTBlockAfter(round) => {
                     post_block_disseminator
                         .disseminate_own_meta_post_block(round)
+                        .await
+                }
+                NetworkMessage::SubscribeOwnMVBAProposalAfter(round) => {
+                    post_block_disseminator
+                        .disseminate_own_uncertified_mvbas(round)
+                        .await
+                }
+                NetworkMessage::SubscribeOwnCertifiedMVBAAfter(round) => {
+                    post_block_disseminator
+                        .disseminate_own_certified_mvbas(round)
                         .await
                 }
                 NetworkMessage::ProofOfStuckBlockVote(post_block_vote) => {
@@ -266,7 +300,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     );
                     if let Some(author_key) = committee_clone.get_public_key(my_authority_index) {
                         post_block_disseminator
-                            .send_vote(author_key.clone(), meta_post_block)
+                            .send_vote_to_post_block(author_key.clone(), meta_post_block)
                             .await
                     } else {
                         tracing::error!(
@@ -293,10 +327,13 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         inner.syncer.add_post_blocks(vec![post_block]).await;
                     }
                 }
-                NetworkMessage::MVBA(mvba) => {
-                    // handle PoST messages
-                    tracing::debug!("Received MVBA {} from {}", mvba, peer);
-                    // todo: handle MVBA, run FIN ACS protocol
+                NetworkMessage::MVBAProposal(mvba_proposal) => {
+                    // todo: verify and sign it
+                    tracing::debug!("Received mvba proposal {:?} from {}", mvba_proposal, peer);
+                }
+                NetworkMessage::CertifiedMVBA(certified_mvba) => {
+                    tracing::debug!("Received certified mvba {:?} from {}", certified_mvba, peer);
+                    // inner.syncer.add_certified_mvba(vec![certified_mvba]).await;
                 }
                 // todo: handle ACS consensus
                 NetworkMessage::Block(block) => {

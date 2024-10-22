@@ -3,8 +3,10 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    hash::Hash,
     mem,
-    sync::{atomic::AtomicU64, Arc, RwLock}, time::{Duration, Instant},
+    sync::{atomic::AtomicU64, Arc, RwLock},
+    time::{Duration, Instant},
 };
 
 use acs::acs_types::ConsensusMode;
@@ -12,7 +14,9 @@ use acs::acs_types::ConsensusMode;
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{ACSManager, PoSTBlockVote, UncertifiedPoSTBlockData},
+    acs_manager::{
+        ACSManager, PoSTBlockVote, ReliableMVBA, ReliableMVBAProposal, UncertifiedPoSTBlockData,
+    },
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -29,12 +33,15 @@ use crate::{
     data::Data,
     epoch_close::EpochManager,
     metrics::{Metrics, UtilizationTimerVecExt},
+    network::{Connection, NetworkMessage},
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
     types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock},
     wal::{WalPosition, WalSyncer, WalWriter},
 };
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 
 pub struct Core<H: BlockHandler> {
     block_manager: BlockManager,
@@ -60,6 +67,7 @@ pub struct Core<H: BlockHandler> {
     last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
     acs_timeout: Duration,
     last_commit_time: Instant,
+    pub network_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
 }
 
 pub struct CoreOptions {
@@ -180,6 +188,7 @@ impl<H: BlockHandler> Core<H> {
             last_seen_blocks,
             acs_timeout: public_config.parameters.acs_timeout,
             last_commit_time: Instant::now(),
+            network_connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -198,12 +207,34 @@ impl<H: BlockHandler> Core<H> {
         self
     }
 
+    pub fn set_connections(
+        &mut self,
+        connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
+    ) {
+        self.network_connections = connections;
+    }
+
+    // for test: done
+    pub async fn test_connections(&self) -> Option<()> {
+        // just for test:
+        for (_, c) in self.network_connections.read().unwrap().iter() {
+            let _ = c
+                .send(NetworkMessage::CertifiedMVBA(ReliableMVBA::new(
+                    self.authority,
+                    0,
+                    0,
+                )))
+                .await
+                .ok()?;
+        }
+        Some(())
+    }
+
     // Note that generally when you update this function you also want to change genesis initialization above
     pub fn add_blocks(&mut self, blocks: Vec<Data<StatementBlock>>) -> Vec<Data<StatementBlock>> {
-        // if we are in fallback mode, we don't add any blocks
-        if self.consensus_mode == ConsensusMode::Fallback {
-            return vec![];
-        }
+        // tracing::debug!("the number of connections is {}", self.network_connections.read().unwrap().len());
+        let rt = Runtime::new().unwrap();
+        rt.block_on(self.test_connections());
         let _timer = self
             .metrics
             .utilization_timer
@@ -257,7 +288,6 @@ impl<H: BlockHandler> Core<H> {
     }
 
     fn switch_to_fallback(&mut self) {
-        self.consensus_mode = ConsensusMode::Fallback;
         self.acs_manager
             .write()
             .expect("ACS manager fails to create own block")
@@ -267,6 +297,7 @@ impl<H: BlockHandler> Core<H> {
                 self.last_seen_blocks.clone(),
             );
         tracing::info!("Switching to Fallback mode");
+        self.consensus_mode = ConsensusMode::Fallback;
     }
     // handle vote for own ACS block here
     pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
@@ -307,10 +338,6 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn try_new_block(&mut self) -> Option<Data<StatementBlock>> {
-        // if we are in fallback mode, we don't create any blocks
-        if self.consensus_mode == ConsensusMode::Fallback {
-            return None;
-        }
         let _timer = self
             .metrics
             .utilization_timer
@@ -449,10 +476,17 @@ impl<H: BlockHandler> Core<H> {
             .collect();
 
         if sequence.is_empty() {
-            if start - self.last_commit_time > self.acs_timeout && self.consensus_mode == ConsensusMode::Optimistic {
-                tracing::info!("ACS timeout {:?} reached {:?}, switching to MVBA", self.acs_timeout, start - self.last_commit_time);
+            // if we cannot commit blocks for a long time, switch to ACS consensus mode
+            if start - self.last_commit_time > self.acs_timeout
+                && self.consensus_mode == ConsensusMode::Optimistic
+            {
+                tracing::info!(
+                    "ACS timeout {:?} reached {:?}, switching to MVBA",
+                    self.acs_timeout,
+                    start - self.last_commit_time
+                );
                 self.switch_to_fallback();
-            } 
+            }
         } else {
             self.last_commit_time = start;
         }
