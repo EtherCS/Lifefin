@@ -13,7 +13,8 @@ use acs::acs_types::ConsensusMode;
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{ACSManager, CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
+    acs_manager::ACSManager,
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{

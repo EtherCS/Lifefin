@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc, thread};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    acs_manager::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
     block_handler::BlockHandler,
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},

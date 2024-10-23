@@ -22,10 +22,7 @@ use tokio::{
 };
 
 use crate::{
-    acs_manager::{
-        PoSTBlockVote, ReliableMVBA, ReliableMVBAProposal,
-        CertifiedPoSTBlockData,
-    },
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA, ReliableMVBAProposal},
     config::NodePublicConfig,
     data::Data,
     metrics::{print_network_address_table, Metrics},

@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 #[cfg(not(test))]
 use crate::types::Vote;
 use crate::{
-    acs_manager::{MetaPoSTBlockData, PoSTBlockVote, ReliableMVBA, MVBA},
+    acs_types::{MetaPoSTBlockData, PoSTBlockVote, ReliableMVBA, MVBA},
     data::Data,
     serde::{ByteRepr, BytesVisitor},
     types::{

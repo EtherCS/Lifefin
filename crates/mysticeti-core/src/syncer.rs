@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
