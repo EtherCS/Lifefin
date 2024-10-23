@@ -12,6 +12,9 @@ refer to disseminator.disseminate_own_blocks
 - handle meta PoST (generate Vote and send it back to the authority) -> done
 - update own PoST with signature -> done
 - impl sending PoST blocks interface, refer to '''disseminate_own_blocks''' -> done
-- impl '''verify''' function for UncertifiedPoSTBlockData -> done
+- impl '''verify''' function for CertifiedPoSTBlockData -> done
 - impl '''add_post_blocks''' function for handling PoST blocks in core module  -> done
+- add signature for metapostblock
 - impl ACS consensus mode after generate a PoST block
+    - handling MVBA input
+    - impl MVBA

@@ -13,9 +13,7 @@ use acs::acs_types::ConsensusMode;
 use minibytes::Bytes;
 
 use crate::{
-    acs_manager::{
-        ACSManager, CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA
-    },
+    acs_manager::{ACSManager, CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -151,7 +149,7 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
-        // acs_quorum = 2n/3 + 1 
+        // acs_quorum = 2n/3 + 1
         let acs_quorum = (*committee).clone().quorum_threshold();
         let public_key = committee.get_public_key(authority);
         let acs_manager = Arc::new(RwLock::new(ACSManager::new(
@@ -290,27 +288,14 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
-    // pub fn add_meta_post_blocks(&mut self, meta_blocks: Vec<MetaPoSTBlockData>) {
-    //     let _timer = self
-    //         .metrics
-    //         .utilization_timer
-    //         .utilization_timer("Core::add_meta_post_blocks");
-    //     for meta_block in meta_blocks {
-    //         // check if we receive equvocated meta post block (make sure not sign two post blocks)
-    //         if self.acs_manager.write().expect("ACS manager fails to write").add_meta_post_block(meta_block.clone()) {
-    //             let public_key = self.acs_manager.read().expect("Fail to read acs manager").public_key();
-    //             let vote = PoSTBlockVote::new(meta_block, public_key, self.signer.clone());
-    //         }
-    //     }
-    // }
-
     // handle vote for own ACS block here
     pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
         let _timer = self
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_post_block_votes");
-        let new_post_blocks = self.acs_manager
+        let new_post_blocks = self
+            .acs_manager
             .write()
             .expect("ACS manager fails to write post block votes")
             .add_votes(votes, self.acs_quorum);
@@ -321,11 +306,21 @@ impl<H: BlockHandler> Core<H> {
             if peer == self.authority {
                 tracing::debug!("Broadcasting own post block {:?}", new_post_block);
                 // this is our post block
-                rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(new_post_block.clone())));
+                rt.block_on(
+                    self.broadcast(NetworkMessage::ProofOfStuckBlock(new_post_block.clone())),
+                );
             } else {
                 // this is a vote from other peer
-                let public_key = self.acs_manager.read().expect("Fail to read acs manager").public_key();
-                let vote = PoSTBlockVote::new(new_post_block.get_meta_post_block(), public_key, self.signer.clone());
+                let public_key = self
+                    .acs_manager
+                    .read()
+                    .expect("Fail to read acs manager")
+                    .public_key();
+                let vote = PoSTBlockVote::new(
+                    new_post_block.get_meta_post_block(),
+                    public_key,
+                    self.signer.clone(),
+                );
                 rt.block_on(self.send_peer(peer, NetworkMessage::ProofOfStuckBlockVote(vote)));
             }
         }
@@ -334,10 +329,11 @@ impl<H: BlockHandler> Core<H> {
     /// We switch to fallback mode if one of the following conditions is met:
     /// 1) receive 2f+1 post blocks
     /// 2) trigger acs timeout (which could be very long, said 10 minutes, in practice)
-    /// 3) todo: almost run out of memory 
+    /// 3) todo: almost run out of memory
     fn switch_to_fallback(&mut self) {
         // create own certified post block
-        let my_certified_post_block = self.acs_manager
+        let my_certified_post_block = self
+            .acs_manager
             .write()
             .expect("ACS manager fails to create own block")
             .create_own_post_block(
@@ -349,11 +345,21 @@ impl<H: BlockHandler> Core<H> {
         let rt = Runtime::new().unwrap();
         if (my_certified_post_block.signatures.len() as Stake) > self.acs_quorum {
             // broadcast the certified post block if we have enough signatures
-            rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(my_certified_post_block.clone())));
+            rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(
+                my_certified_post_block.clone(),
+            )));
         } else {
             // broadcast the post block vote (meta + signature) if we don't have enough signatures
-            let public_key = self.acs_manager.read().expect("Fail to read acs manager").public_key();
-            let vote = PoSTBlockVote::new(my_certified_post_block.clone().get_meta_post_block(), public_key, self.signer.clone());
+            let public_key = self
+                .acs_manager
+                .read()
+                .expect("Fail to read acs manager")
+                .public_key();
+            let vote = PoSTBlockVote::new(
+                my_certified_post_block.clone().get_meta_post_block(),
+                public_key,
+                self.signer.clone(),
+            );
             rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlockVote(vote)));
         }
         tracing::info!("Switching to Fallback mode");
@@ -685,7 +691,7 @@ impl<H: BlockHandler> Core<H> {
         Arc::clone(&self.acs_manager)
     }
 
-    /* We implement network communication for core here: */ 
+    /* We implement network communication for core here: */
     // todo: reliable broadcast
     pub async fn broadcast(&self, message: NetworkMessage) {
         let connections = self.network_connections.read().unwrap();

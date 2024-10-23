@@ -17,7 +17,6 @@ use tokio::{
 };
 
 use crate::{
-    // acs_manager::{ACSManager, ReliableMVBA, ReliableMVBAProposal},
     block_handler::BlockHandler,
     block_store::BlockStore,
     committee::Committee,
@@ -62,7 +61,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         shutdown_grace_period: Duration,
         metrics: Arc<Metrics>,
         public_config: &NodePublicConfig,
-        // private_config: NodePrivateConfig,
     ) -> Self {
         let authority_index = core.authority();
         let handle = Handle::current();
@@ -74,7 +72,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         let wal_syncer = core.wal_syncer();
         let block_store = core.block_store().clone();
         let epoch_closing_time = core.epoch_closing_time();
-        // let acs_manager = core.acs_manager();
         let core_connections = Arc::new(RwLock::new(HashMap::new()));
         core.set_connections(Arc::clone(&core_connections));
         let mut syncer = Syncer::new(
@@ -113,8 +110,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             shutdown_grace_period,
             block_fetcher,
             metrics.clone(),
-            // private_config,
-            // acs_manager,
             Arc::clone(&core_connections),
         ));
         let syncer_task = AsyncWalSyncer::start(wal_syncer, stop_sender, epoch_sender);
@@ -144,8 +139,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         shutdown_grace_period: Duration,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
-        // private_config: NodePrivateConfig,
-        // acs_manager: Arc<RwLock<ACSManager>>,
         core_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
     ) {
         let mut connections: HashMap<usize, JoinHandle<Option<()>>> = HashMap::new();
@@ -166,15 +159,11 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             let sender = connection.sender.clone();
             let authority = peer_id as AuthorityIndex;
             block_fetcher.register_authority(authority, sender).await;
-            // add connection to core
-            // core_connections.write().unwrap().insert(authority, connection.sender.clone());
             let task = handle.spawn(Self::connection_task(
                 connection,
                 inner.clone(),
                 block_fetcher.clone(),
                 metrics.clone(),
-                // private_config.clone(),
-                // Arc::clone(&acs_manager),
                 Arc::clone(&core_connections),
             ));
             connections.insert(peer_id, task);
@@ -196,8 +185,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         inner: Arc<NetworkSyncerInner<H, C>>,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
-        // private_config: NodePrivateConfig,
-        // acs_manager: Arc<RwLock<ACSManager>>,
         core_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
     ) -> Option<()> {
         let last_seen = inner
@@ -208,17 +195,12 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .send(NetworkMessage::SubscribeOwnFrom(last_seen))
             .await
             .ok()?;
-        // let signer = private_config.keypair;
         let mut disseminator = BlockDisseminator::new(
             connection.sender.clone(),
             inner.clone(),
             SynchronizerParameters::default(),
             metrics.clone(),
         );
-
-        // let my_authority_index = acs_manager.read().unwrap().authority();
-        // let mut post_block_disseminator =
-        //     PoSTBlockDisseminator::new(acs_manager, connection.sender.clone(), signer);
 
         let id = connection.peer_id as AuthorityIndex;
         inner.syncer.authority_connection(id, true).await;
@@ -228,9 +210,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             .insert(id, connection.sender.clone());
 
         let peer = format_authority_index(id);
-        // let committee_clone = (*inner.committee).clone();
-        // Ether: handle messages here
-        // Ether todo: handle PoST messages
         while let Some(message) = inner.recv_or_stopped(&mut connection.receiver).await {
             match message {
                 NetworkMessage::SubscribeOwnFrom(round) => {
@@ -254,16 +233,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         post_block.stuck_block.reference(),
                         peer
                     );
-                    if let Err(e) = post_block.verify(&inner.committee) {
-                        tracing::warn!(
-                            "Rejected incorrect PoST block {} from {}: {:?}",
-                            post_block.stuck_block.reference(),
-                            peer,
-                            e
-                        );
-                    } else {
-                        inner.syncer.add_post_blocks(vec![post_block]).await;
-                    }
+                    inner.syncer.add_post_blocks(vec![post_block]).await;
                 }
                 NetworkMessage::MVBAProposal(mvba_proposal) => {
                     // todo: verify and sign it
