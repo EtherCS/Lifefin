@@ -273,7 +273,6 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     tracing::debug!("Received certified mvba {:?} from {}", certified_mvba, peer);
                     // inner.syncer.add_certified_mvba(vec![certified_mvba]).await;
                 }
-                // todo: handle ACS consensus
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
                     if let Err(e) = block.verify(&inner.committee) {

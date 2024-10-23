@@ -4,9 +4,9 @@ use crate::{
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
-use eyre::Ok;
+use eyre::{bail, Ok};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::BTreeMap};
 use std::collections::HashMap;
 
 pub type MVBA = u128;
@@ -110,7 +110,7 @@ impl ACSManager {
         &mut self,
         round: RoundNumber,
         last_block: Data<StatementBlock>,
-        last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
+        last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     ) -> CertifiedPoSTBlockData {
         if self.round > round {
             tracing::error!(
@@ -121,7 +121,6 @@ impl ACSManager {
         }
         // first see if we have already created a PoST block
         if self.post_blocks.contains_key(&self.authority) {
-            tracing::debug!("PoST block already created");
             return self.post_blocks.get(&self.authority).unwrap().clone();
         } else {
             let post_block =
@@ -151,7 +150,7 @@ impl ACSManager {
                     return;
                 }
                 self.post_blocks.insert(authority, post_block);
-                if (self.mvba.proposal.count_ones() as u64) > acs_quorum {
+                if (self.mvba.proposal.count_ones() as u64) >= acs_quorum {
                     // note that we don't change the input of the MVBA protocol
                     tracing::info!("MVBA already reached quorum");
                     // return;
@@ -205,29 +204,30 @@ impl ACSManager {
         let mut return_post_blocks = Vec::new();
         for vote in votes {
             // verify the signature
-            if let Err(e) = vote.author.verify_post_block_vote(&vote) {
-                tracing::warn!("Rejected incorrect PoST block vote: {:?}", e);
+            if let Err(e) = vote.verify(&self.committee) {
+                tracing::warn!("Rejected incorrect PoST block vote {:?}: {:?}", vote, e);
                 continue;
             }
+            let vote_block_author = vote.vote_author();
             let vote_public_key = vote.author.clone();
             if !self.committee.known_authority_key(&vote_public_key) {
                 tracing::warn!("Unknown public key");
             } else {
-                if vote_public_key == self.public_key {
+                if vote_block_author == self.authority {
                     // we handle vote for ourself
                     if let Some(post_block) = self.post_blocks.get_mut(&self.authority) {
                         // check if the vote is for our own PoST block
                         if post_block.get_meta_post_block().digest() == vote.meta_post_block.digest() {
                             // if we already have enough signatures, ignore the vote to avoid different PoST blocks
-                            if post_block.signatures.len() > acs_quorum as usize {
+                            if post_block.signatures.len() >= acs_quorum as usize {
                                 continue;
-                            }
+                            }                           
                             // add the signature to the PoST block
                             post_block.update_signature(vote.author, vote.signature);
-                            if post_block.signatures.len() > acs_quorum as usize {
+                            if post_block.signatures.len() >= acs_quorum as usize {
                                 return_post_blocks.push(post_block.clone());
                                 // own PoST block is certified
-                                if (self.mvba.proposal.count_ones() as u64) > acs_quorum {
+                                if (self.mvba.proposal.count_ones() as u64) >= acs_quorum {
                                     // note that we don't change the input of the MVBA protocol
                                     tracing::info!("MVBA already reached quorum");
                                     // return;
@@ -310,7 +310,7 @@ impl ACSManager {
     // }
 
     pub fn ready_for_mvba(&self, committee: &Committee) -> bool {
-        (self.mvba.proposal.count_ones() as u64) > committee.quorum_threshold()
+        (self.mvba.proposal.count_ones() as u64) >= committee.quorum_threshold()
     }
 
     pub fn authority(&self) -> AuthorityIndex {
@@ -336,14 +336,14 @@ impl ACSManager {
 pub struct MetaPoSTBlockData {
     pub stuck_round: RoundNumber,
     pub stuck_block: Data<StatementBlock>,
-    pub seen_blocks: HashMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
+    pub seen_blocks: BTreeMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
 }
 
 impl MetaPoSTBlockData {
     pub fn new(
         stuck_round: RoundNumber,
         stuck_block: Data<StatementBlock>,
-        seen_blocks: HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     ) -> Self {
         Self {
             stuck_round,
@@ -360,7 +360,7 @@ impl MetaPoSTBlockData {
         &self.stuck_block
     }
 
-    pub fn seen_blocks(&self) -> &HashMap<AuthorityIndex, BlockReference> {
+    pub fn seen_blocks(&self) -> &BTreeMap<AuthorityIndex, BlockReference> {
         &self.seen_blocks
     }
 
@@ -403,13 +403,28 @@ impl PoSTBlockVote {
     pub fn signature(&self) -> &SignatureBytes {
         &self.signature
     }
+
+    pub fn vote_author(&self) -> AuthorityIndex{
+        self.meta_post_block.stuck_block().reference().authority
+    }
+
+    pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
+        if !committee.known_authority_key(&self.author) {
+            bail!("Unknown block author {:?}", self.author)
+        }
+        if let Err(e) = self.author.verify_post_block_vote(self) {
+            bail!("Post block vote signature verification has failed: {:?}", e);
+        }
+        Ok(())
+    }
+
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CertifiedPoSTBlockData {
     pub stuck_round: RoundNumber,          // the round I am stuck at
     pub stuck_block: Data<StatementBlock>, // the block I proposed at the stuck round
-    pub seen_blocks: HashMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
+    pub seen_blocks: BTreeMap<AuthorityIndex, BlockReference>, // ordered by nodes' public keys
     pub signatures: Vec<(PublicKey, SignatureBytes)>, // 2f+1 signatures
 }
 
@@ -418,14 +433,14 @@ impl CertifiedPoSTBlockData {
         Self {
             stuck_round: 0,
             stuck_block: StatementBlock::new_genesis(authority),
-            seen_blocks: HashMap::new(),
+            seen_blocks: BTreeMap::new(),
             signatures: Vec::new(),
         }
     }
     pub fn new(
         stuck_round: RoundNumber,
         stuck_block: Data<StatementBlock>,
-        seen_blocks: HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
         signatures: Vec<(PublicKey, SignatureBytes)>,
     ) -> Self {
         Self {
@@ -454,7 +469,7 @@ impl CertifiedPoSTBlockData {
         // todo: verify
         let meta_post_block = self.get_meta_post_block();
         if self.signatures.len() < committee.quorum_threshold() as usize {
-            eyre::bail!("Not enough signatures");
+            eyre::bail!("Not enough signatures, only {} but quorum is {}", self.signatures.len(), committee.quorum_threshold());
         }
         for (author, signature) in &self.signatures {
             if !committee.known_authority_key(author) {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     mem,
     sync::{atomic::AtomicU64, Arc, RwLock},
     time::{Duration, Instant},
@@ -65,7 +65,7 @@ pub struct Core<H: BlockHandler> {
     acs_quorum: Stake,
     consensus_mode: ConsensusMode,
     acs_manager: Arc<RwLock<ACSManager>>,
-    last_seen_blocks: HashMap<AuthorityIndex, BlockReference>,
+    last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     acs_timeout: Duration,
     last_commit_time: Instant,
     pub network_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
@@ -105,7 +105,7 @@ impl<H: BlockHandler> Core<H> {
             committed_state,
         } = recovered;
         let mut threshold_clock = ThresholdClockAggregator::new(0);
-        let mut last_seen_blocks = HashMap::new();
+        let mut last_seen_blocks = BTreeMap::new();
         let last_own_block = if let Some(own_block) = last_own_block {
             for (_, pending_block) in pending.iter() {
                 if let MetaStatement::Include(include) = pending_block {
@@ -151,7 +151,7 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
-        // acs_quorum = 2/3
+        // acs_quorum = 2n/3 + 1 
         let acs_quorum = (*committee).clone().quorum_threshold();
         let public_key = committee.get_public_key(authority);
         let acs_manager = Arc::new(RwLock::new(ACSManager::new(
@@ -319,6 +319,7 @@ impl<H: BlockHandler> Core<H> {
             let rt = Runtime::new().unwrap();
             let peer = new_post_block.stuck_block.author();
             if peer == self.authority {
+                tracing::debug!("Broadcasting own post block {:?}", new_post_block);
                 // this is our post block
                 rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(new_post_block.clone())));
             } else {
@@ -684,7 +685,8 @@ impl<H: BlockHandler> Core<H> {
         Arc::clone(&self.acs_manager)
     }
 
-    /// We implement network communication for core here:
+    /* We implement network communication for core here: */ 
+    // todo: reliable broadcast
     pub async fn broadcast(&self, message: NetworkMessage) {
         let connections = self.network_connections.read().unwrap();
         for (_, c) in connections.iter() {
@@ -692,6 +694,7 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
+    // todo: reliable send
     pub async fn send_peer(&self, peer: AuthorityIndex, message: NetworkMessage) {
         let connections = self.network_connections.read().unwrap();
         if let Some(c) = connections.get(&peer) {

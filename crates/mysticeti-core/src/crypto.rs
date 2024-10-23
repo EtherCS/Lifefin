@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use digest::Digest;
@@ -149,7 +149,7 @@ impl PoSTBlockDigest {
     pub fn new(
         stuck_round: RoundNumber,
         stuck_block: &Data<StatementBlock>,
-        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
         signature: &SignatureBytes,
     ) -> Self {
         let mut hasher = PoSTBlockHasher::default();
@@ -162,7 +162,7 @@ impl PoSTBlockDigest {
         hasher: &mut PoSTBlockHasher,
         stuck_round: RoundNumber,
         stuck_block: &Data<StatementBlock>,
-        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
     ) {
         stuck_round.crypto_hash(hasher);
         stuck_block.reference().digest.crypto_hash(hasher);
@@ -178,7 +178,7 @@ impl MetaPoSTBlockDigest {
     pub fn new(
         stuck_round: RoundNumber,
         stuck_block: &Data<StatementBlock>,
-        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
     ) -> Self {
         let mut hasher = MetaPoSTBlockHasher::default();
         Self::digest_without_signature(&mut hasher, stuck_round, stuck_block, seen_blocks);
@@ -189,7 +189,7 @@ impl MetaPoSTBlockDigest {
         hasher: &mut MetaPoSTBlockHasher,
         stuck_round: RoundNumber,
         stuck_block: &Data<StatementBlock>,
-        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
     ) {
         stuck_round.crypto_hash(hasher);
         stuck_block.reference().digest.crypto_hash(hasher);
@@ -351,7 +351,7 @@ impl Signer {
         &self,
         stuck_round: RoundNumber,
         stuck_block: &Data<StatementBlock>,
-        seen_blocks: &HashMap<AuthorityIndex, BlockReference>,
+        seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
     ) -> SignatureBytes {
         let mut hasher = PoSTBlockHasher::default();
         PoSTBlockDigest::digest_without_signature(
