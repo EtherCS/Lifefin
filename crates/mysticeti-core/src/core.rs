@@ -14,7 +14,7 @@ use minibytes::Bytes;
 
 use crate::{
     acs_manager::ACSManager,
-    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, PoSTBlockVote, MVBAProposal, MVBAVote},
+    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PoSTBlockVote},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -339,11 +339,7 @@ impl<H: BlockHandler> Core<H> {
         if mvba.is_certified(self.acs_quorum) {
             rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(mvba)));
         } else {
-            let mvba_proposal = MVBAProposal::new(
-                mvba.authority,
-                mvba.round,
-                mvba.proposal,
-            );
+            let mvba_proposal = MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal);
             let vote = MVBAVote::new_with_signer(
                 mvba_proposal.clone(),
                 self.authority,

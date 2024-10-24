@@ -1,13 +1,16 @@
 use crate::{
-    acs_types::{ACSFin, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, MetaPoSTBlockData, PoSTBlockVote},
+    acs_types::{
+        ACSFin, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, MetaPoSTBlockData,
+        PoSTBlockVote,
+    },
     committee::Committee,
     crypto::{PublicKey, Signer},
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
 
-use std::{collections::HashMap, hash::Hash};
 use std::{cmp::Ordering, collections::BTreeMap};
+use std::{collections::HashMap, hash::Hash};
 
 pub struct ACSManager {
     authority: AuthorityIndex,
@@ -57,8 +60,12 @@ impl ACSManager {
         if self.post_blocks.contains_key(&self.authority) {
             return self.post_blocks.get(&self.authority).unwrap().clone();
         } else {
-            let post_block =
-                CertifiedPoSTBlockData::new_with_my_signagure(round, last_block, last_seen_blocks, signer);
+            let post_block = CertifiedPoSTBlockData::new_with_my_signagure(
+                round,
+                last_block,
+                last_seen_blocks,
+                signer,
+            );
             self.post_blocks.insert(self.authority, post_block.clone());
             return post_block;
         }
@@ -101,7 +108,9 @@ impl ACSManager {
                         >= acs_quorum
                     {
                         // note that we don't change the input of the MVBA protocol
-                        tracing::info!("MVBA already reached quorum, we don't change the mvba proposal");
+                        tracing::info!(
+                            "MVBA already reached quorum, we don't change the mvba proposal"
+                        );
                         // return;
                     } else {
                         self.acs_fin
@@ -172,7 +181,10 @@ impl ACSManager {
                 if let Some(proposal) = self.last_seen_mvba_proposal.get(&authority) {
                     if proposal.digest() == mvba_proposal.digest() {
                         // this is legal meta post block
-                        tracing::debug!("MVBA proposal from authority {} already received", authority);
+                        tracing::debug!(
+                            "MVBA proposal from authority {} already received",
+                            authority
+                        );
                         return true;
                     } else {
                         // this is illegal meta post block
@@ -214,9 +226,7 @@ impl ACSManager {
                 // we handle vote for ourself
                 if let Some(post_block) = self.post_blocks.get_mut(&self.authority) {
                     // check if the vote is for our own PoST block
-                    if post_block.get_meta_post_block().digest()
-                        == vote.meta_post_block.digest()
-                    {
+                    if post_block.get_meta_post_block().digest() == vote.meta_post_block.digest() {
                         // if we already have enough signatures, ignore the vote to avoid different PoST blocks
                         if post_block.signatures.len() >= acs_quorum as usize {
                             continue;
@@ -264,7 +274,6 @@ impl ACSManager {
                     return_post_blocks.push(peer_post_block);
                 }
             }
-
         }
         return_post_blocks
     }
@@ -276,7 +285,7 @@ impl ACSManager {
     pub fn add_mvba_votes(
         &mut self,
         uncertified_mvbas: Vec<MVBAVote>,
-        acs_quorum: Stake
+        acs_quorum: Stake,
     ) -> Vec<CertifiedMVBA> {
         let mut return_mvbas = Vec::new();
         for mvba in uncertified_mvbas {

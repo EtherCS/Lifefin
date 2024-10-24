@@ -3,7 +3,7 @@
 
 use crate::{
     committee::Committee,
-    crypto::{MetaPoSTBlockDigest, MVBADigest, PublicKey, SignatureBytes, Signer},
+    crypto::{MVBADigest, MetaPoSTBlockDigest, PublicKey, SignatureBytes, Signer},
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
@@ -63,7 +63,11 @@ pub struct PoSTBlockVote {
 }
 
 impl PoSTBlockVote {
-    pub fn new(meta_post_block: MetaPoSTBlockData, authority: AuthorityIndex, signer: Signer) -> Self {
+    pub fn new(
+        meta_post_block: MetaPoSTBlockData,
+        authority: AuthorityIndex,
+        signer: Signer,
+    ) -> Self {
         let signature = signer.sign_post_block(
             meta_post_block.stuck_round,
             meta_post_block.stuck_block(),
@@ -143,11 +147,7 @@ impl CertifiedPoSTBlockData {
         signer: Signer,
     ) -> Self {
         let mut signatures = Vec::new();
-        let signature = signer.sign_post_block(
-            stuck_round,
-            &stuck_block,
-            &seen_blocks,
-        );
+        let signature = signer.sign_post_block(stuck_round, &stuck_block, &seen_blocks);
         signatures.push((signer.public_key(), signature));
         Self {
             stuck_round,
@@ -196,8 +196,8 @@ impl CertifiedPoSTBlockData {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MVBAProposal {
-    pub authority: AuthorityIndex,  // the creator of this proposal
-    pub round: RoundNumber, // the last round agreed by the ACS mode
+    pub authority: AuthorityIndex, // the creator of this proposal
+    pub round: RoundNumber,        // the last round agreed by the ACS mode
     pub proposal: MVBA,
 }
 
@@ -221,7 +221,7 @@ impl MVBAProposal {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MVBAVote {
     pub mvba_proposal: MVBAProposal,
-    pub voter: AuthorityIndex,  // the signer of this MVBAProposal
+    pub voter: AuthorityIndex,     // the signer of this MVBAProposal
     pub signature: SignatureBytes, // my signature on this mvba proposal
 }
 
@@ -231,7 +231,11 @@ impl MVBAVote {
         voter: AuthorityIndex,
         signer: Signer,
     ) -> Self {
-        let signature = signer.sign_mvba_proposal(mvba_proposal.authority, mvba_proposal.round, mvba_proposal.proposal);
+        let signature = signer.sign_mvba_proposal(
+            mvba_proposal.authority,
+            mvba_proposal.round,
+            mvba_proposal.proposal,
+        );
         Self {
             mvba_proposal,
             voter,
@@ -290,7 +294,7 @@ impl CertifiedMVBA {
     pub fn get_mvba_proposal(&self) -> MVBAProposal {
         MVBAProposal::new(self.authority, self.round, self.proposal)
     }
-    
+
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
         if self.signatures.len() < committee.quorum_threshold() as usize {
             eyre::bail!("Not enough signatures");

@@ -15,7 +15,8 @@ use zeroize::Zeroize;
 use crate::types::Vote;
 use crate::{
     acs_types::{
-        ABARoundNumber, BinaryValue, CertifiedMVBA, MetaPoSTBlockData, PisaABAAux, PisaABABval, PoSTBlockVote, MVBAVote, MVBA
+        ABARoundNumber, BinaryValue, CertifiedMVBA, MVBAVote, MetaPoSTBlockData, PisaABAAux,
+        PisaABABval, PoSTBlockVote, MVBA,
     },
     data::Data,
     serde::{ByteRepr, BytesVisitor},
@@ -232,7 +233,12 @@ impl MVBADigest {
 
 pub type PisaABAHasher = blake2::Blake2b<digest::consts::U32>;
 impl PisaABADigest {
-    pub fn new(aba_round: RoundNumber, p1: BinaryValue, p2: BinaryValue, authority: AuthorityIndex) -> Self {
+    pub fn new(
+        aba_round: RoundNumber,
+        p1: BinaryValue,
+        p2: BinaryValue,
+        authority: AuthorityIndex,
+    ) -> Self {
         let mut hasher = PisaABAHasher::default();
         Self::digest_without_signature(&mut hasher, aba_round, p1, p2, authority);
         Self(hasher.finalize().into())
@@ -326,10 +332,7 @@ impl PublicKey {
         self.0.verify(&signature, digest.as_ref())
     }
 
-    pub fn verify_mvba_vote(
-        &self,
-        mvba_vote: &MVBAVote,
-    ) -> Result<(), ed25519_consensus::Error> {
+    pub fn verify_mvba_vote(&self, mvba_vote: &MVBAVote) -> Result<(), ed25519_consensus::Error> {
         let signature = Signature::from(mvba_vote.signature.0);
         let mut hasher = MVBAHasher::default();
         MVBADigest::digest_without_signature(
