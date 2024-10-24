@@ -3,7 +3,7 @@
 
 use crate::{
     committee::Committee,
-    crypto::{MetaPoSTBlockDigest, PublicKey, ReliableMVBADigest, SignatureBytes, Signer},
+    crypto::{MetaPoSTBlockDigest, PublicKey, CertifiedMVBADigest, SignatureBytes, Signer},
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
@@ -58,12 +58,12 @@ impl MetaPoSTBlockData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoSTBlockVote {
     pub meta_post_block: MetaPoSTBlockData,
-    pub author: PublicKey,
+    pub authority: AuthorityIndex,
     pub signature: SignatureBytes,
 }
 
 impl PoSTBlockVote {
-    pub fn new(meta_post_block: MetaPoSTBlockData, author: PublicKey, signer: Signer) -> Self {
+    pub fn new(meta_post_block: MetaPoSTBlockData, authority: AuthorityIndex, signer: Signer) -> Self {
         let signature = signer.sign_post_block(
             meta_post_block.stuck_round,
             meta_post_block.stuck_block(),
@@ -71,7 +71,7 @@ impl PoSTBlockVote {
         );
         Self {
             meta_post_block,
-            author,
+            authority,
             signature,
         }
     }
@@ -84,15 +84,20 @@ impl PoSTBlockVote {
         &self.signature
     }
 
-    pub fn vote_author(&self) -> AuthorityIndex {
+    pub fn author(&self) -> AuthorityIndex {
+        self.authority
+    }
+
+    pub fn vote_creator(&self) -> AuthorityIndex {
         self.meta_post_block.stuck_block().reference().authority
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
-        if !committee.known_authority_key(&self.author) {
-            bail!("Unknown block author {:?}", self.author)
-        }
-        if let Err(e) = self.author.verify_post_block_vote(self) {
+        let pub_key = committee.get_public_key(self.author());
+        let Some(pub_key) = pub_key else {
+            bail!("Unknown vote author {}", self.author())
+        };
+        if let Err(e) = pub_key.verify_post_block_vote(self) {
             bail!("Post block vote signature verification has failed: {:?}", e);
         }
         Ok(())
@@ -116,12 +121,34 @@ impl CertifiedPoSTBlockData {
             signatures: Vec::new(),
         }
     }
+
     pub fn new(
         stuck_round: RoundNumber,
         stuck_block: Data<StatementBlock>,
         seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
         signatures: Vec<(PublicKey, SignatureBytes)>,
     ) -> Self {
+        Self {
+            stuck_round,
+            stuck_block,
+            seen_blocks,
+            signatures,
+        }
+    }
+
+    pub fn new_with_my_signagure(
+        stuck_round: RoundNumber,
+        stuck_block: Data<StatementBlock>,
+        seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
+        signer: Signer,
+    ) -> Self {
+        let mut signatures = Vec::new();
+        let signature = signer.sign_post_block(
+            stuck_round,
+            &stuck_block,
+            &seen_blocks,
+        );
+        signatures.push((signer.public_key(), signature));
         Self {
             stuck_round,
             stuck_block,
@@ -169,14 +196,14 @@ impl CertifiedPoSTBlockData {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReliableMVBAProposal {
+pub struct UncertifiedMVBA {
     pub authority: AuthorityIndex,
     pub round: RoundNumber, // the last round agreed by the ACS mode
     pub proposal: MVBA,
     pub signature: SignatureBytes, // my signature on this mvba proposal
 }
 
-impl ReliableMVBAProposal {
+impl UncertifiedMVBA {
     pub fn new_with_signer(
         authority: AuthorityIndex,
         round: RoundNumber,
@@ -192,20 +219,20 @@ impl ReliableMVBAProposal {
         }
     }
 
-    pub fn digest(&self) -> ReliableMVBADigest {
-        ReliableMVBADigest::new(self.authority, self.round, self.proposal)
+    pub fn digest(&self) -> CertifiedMVBADigest {
+        CertifiedMVBADigest::new(self.authority, self.round, self.proposal)
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReliableMVBA {
+pub struct CertifiedMVBA {
     pub authority: AuthorityIndex,
     pub round: RoundNumber, // the last round agreed by the ACS mode
     pub proposal: MVBA,     // the proposal value
     pub signatures: Vec<(PublicKey, SignatureBytes)>, // 2f+1 signatures
 }
 
-impl ReliableMVBA {
+impl CertifiedMVBA {
     pub fn new(authority: AuthorityIndex, round: RoundNumber, proposal: MVBA) -> Self {
         Self {
             authority,
@@ -258,7 +285,7 @@ pub struct PisaABABval {
     pub aba_round: ABARoundNumber, // the aba round number
     pub est: BinaryValue,
     pub maj: BinaryValue,
-    pub author_key: PublicKey,
+    pub authority: AuthorityIndex,
     pub signature: SignatureBytes,
 }
 
@@ -267,24 +294,30 @@ impl PisaABABval {
         aba_round: ABARoundNumber,
         est: BinaryValue,
         maj: BinaryValue,
-        author_key: PublicKey,
+        authority: AuthorityIndex,
         signer: Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_bval(aba_round, est, maj);
+        let signature = signer.sign_pisa_aba_bval(aba_round, est, maj, authority);
         Self {
             aba_round,
             est,
             maj,
-            author_key,
+            authority,
             signature,
         }
     }
+
+    pub fn author(&self) -> AuthorityIndex {
+        self.authority
+    }
+
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
-        if !committee.known_authority_key(&self.author_key) {
-            bail!("Unknown block author {:?}", self.author_key)
-        }
-        if let Err(e) = self.author_key.verify_pisa_aba_bval(self) {
-            bail!("Pisa aba bval signature verification has failed: {:?}", e);
+        let pub_key = committee.get_public_key(self.author());
+        let Some(pub_key) = pub_key else {
+            bail!("Unknown pisa aba bval author {}", self.author())
+        };
+        if let Err(e) = pub_key.verify_pisa_aba_bval(self) {
+            bail!("pisa aba bval signature verification has failed: {:?}", e);
         }
         Ok(())
     }
@@ -294,7 +327,7 @@ pub struct PisaABAAux {
     pub aba_round: ABARoundNumber, // the aba round number
     pub aux1: BinaryValue,
     pub aux2: BinaryValue,
-    pub author_key: PublicKey,
+    pub authority: AuthorityIndex,
     pub signature: SignatureBytes,
 }
 
@@ -303,24 +336,30 @@ impl PisaABAAux {
         aba_round: ABARoundNumber,
         aux1: BinaryValue,
         aux2: BinaryValue,
-        author_key: PublicKey,
+        authority: AuthorityIndex,
         signer: Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_aux(aba_round, aux1, aux2);
+        let signature = signer.sign_pisa_aba_aux(aba_round, aux1, aux2, authority);
         Self {
             aba_round,
             aux1,
             aux2,
-            author_key,
+            authority,
             signature,
         }
     }
+
+    pub fn author(&self) -> AuthorityIndex {
+        self.authority
+    }
+
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
-        if !committee.known_authority_key(&self.author_key) {
-            bail!("Unknown block author {:?}", self.author_key)
-        }
-        if let Err(e) = self.author_key.verify_pisa_aba_aux(self) {
-            bail!("Pisa aba aux signature verification has failed: {:?}", e);
+        let pub_key = committee.get_public_key(self.author());
+        let Some(pub_key) = pub_key else {
+            bail!("Unknown pisa aba aux author {}", self.author())
+        };
+        if let Err(e) = pub_key.verify_pisa_aba_aux(self) {
+            bail!("pisa aba aux signature verification has failed: {:?}", e);
         }
         Ok(())
     }
@@ -329,7 +368,7 @@ pub struct ACSFin {
     pub authority: AuthorityIndex,
     pub committee: Committee,
     pub last_acs_round: RoundNumber, // the last round agreed by the ACS mode
-    pub mvbas: BTreeMap<AuthorityIndex, ReliableMVBA>, // MVBA proposals received from all nodes
+    pub mvbas: BTreeMap<AuthorityIndex, CertifiedMVBA>, // MVBA proposals received from all nodes
     /* the following data is for MVBA */
     pub mvba_view: FINMVBAView, // the current MVBA view
     pub raba_bvals: BTreeMap<FINMVBAView, BTreeMap<AuthorityIndex, PisaABABval>>, // record the binary value proposed by each node in each MVBA round/ABA round
@@ -343,7 +382,7 @@ impl ACSFin {
         last_acs_round: RoundNumber,
     ) -> Self {
         let mut mvbas = BTreeMap::new();
-        let my_reliable_mvba = ReliableMVBA::new(authority, last_acs_round, 0);
+        let my_reliable_mvba = CertifiedMVBA::new(authority, last_acs_round, 0);
         mvbas.insert(authority, my_reliable_mvba);
         Self {
             authority,

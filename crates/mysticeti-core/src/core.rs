@@ -14,7 +14,7 @@ use minibytes::Bytes;
 
 use crate::{
     acs_manager::ACSManager,
-    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, ReliableMVBA},
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -224,7 +224,7 @@ impl<H: BlockHandler> Core<H> {
         // just for test:
         for (_, c) in self.network_connections.read().unwrap().iter() {
             let _ = c
-                .send(NetworkMessage::CertifiedMVBA(ReliableMVBA::new(
+                .send(NetworkMessage::CertifiedMVBA(CertifiedMVBA::new(
                     self.authority,
                     0,
                     0,
@@ -312,14 +312,9 @@ impl<H: BlockHandler> Core<H> {
                 );
             } else {
                 // this is a vote from other peer
-                let public_key = self
-                    .acs_manager
-                    .read()
-                    .expect("Fail to read acs manager")
-                    .public_key();
                 let vote = PoSTBlockVote::new(
                     new_post_block.get_meta_post_block(),
-                    public_key,
+                    self.authority,
                     self.signer.clone(),
                 );
                 rt.block_on(self.send_peer(peer, NetworkMessage::ProofOfStuckBlockVote(vote)));
@@ -341,6 +336,7 @@ impl<H: BlockHandler> Core<H> {
                 self.last_own_block.block.clone().reference().round,
                 self.last_own_block.block.clone(),
                 self.last_seen_blocks.clone(),
+                self.signer.clone(),
             );
         // we use tokio::runtime::Runtime to support calling async function in sync function
         let rt = Runtime::new().unwrap();
@@ -351,14 +347,9 @@ impl<H: BlockHandler> Core<H> {
             )));
         } else {
             // broadcast the post block vote (meta + signature) if we don't have enough signatures
-            let public_key = self
-                .acs_manager
-                .read()
-                .expect("Fail to read acs manager")
-                .public_key();
             let vote = PoSTBlockVote::new(
                 my_certified_post_block.clone().get_meta_post_block(),
-                public_key,
+                self.authority,
                 self.signer.clone(),
             );
             rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlockVote(vote)));

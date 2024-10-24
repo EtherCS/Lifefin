@@ -1,10 +1,11 @@
 use crate::{
     acs_types::{ACSFin, CertifiedPoSTBlockData, MetaPoSTBlockData, PoSTBlockVote},
     committee::Committee,
-    crypto::PublicKey,
+    crypto::{PublicKey, Signer},
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
+
 use std::collections::HashMap;
 use std::{cmp::Ordering, collections::BTreeMap};
 
@@ -41,6 +42,7 @@ impl ACSManager {
         round: RoundNumber,
         last_block: Data<StatementBlock>,
         last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
+        signer: Signer,
     ) -> CertifiedPoSTBlockData {
         if self.round > round {
             tracing::error!(
@@ -54,7 +56,7 @@ impl ACSManager {
             return self.post_blocks.get(&self.authority).unwrap().clone();
         } else {
             let post_block =
-                CertifiedPoSTBlockData::new(round, last_block, last_seen_blocks, Vec::new());
+                CertifiedPoSTBlockData::new_with_my_signagure(round, last_block, last_seen_blocks, signer);
             self.post_blocks.insert(self.authority, post_block.clone());
             return post_block;
         }
@@ -111,6 +113,7 @@ impl ACSManager {
         }
     }
 
+    /// we will check the validity of the meta post block here
     fn add_meta_post_block(&mut self, meta_post_block: MetaPoSTBlockData) -> bool {
         match meta_post_block.stuck_round.cmp(&self.round) {
             // ignore a PoST block with a round less than or equal to the last ACS round
@@ -162,63 +165,64 @@ impl ACSManager {
                 tracing::warn!("Rejected incorrect PoST block vote {:?}: {:?}", vote, e);
                 continue;
             }
-            let vote_block_author = vote.vote_author();
-            let vote_public_key = vote.author.clone();
-            if !self.committee.known_authority_key(&vote_public_key) {
-                tracing::warn!("Unknown public key");
-            } else {
-                if vote_block_author == self.authority {
-                    // we handle vote for ourself
-                    if let Some(post_block) = self.post_blocks.get_mut(&self.authority) {
-                        // check if the vote is for our own PoST block
-                        if post_block.get_meta_post_block().digest()
-                            == vote.meta_post_block.digest()
-                        {
-                            // if we already have enough signatures, ignore the vote to avoid different PoST blocks
-                            if post_block.signatures.len() >= acs_quorum as usize {
-                                continue;
-                            }
-                            // add the signature to the PoST block
-                            post_block.update_signature(vote.author, vote.signature);
-                            if post_block.signatures.len() >= acs_quorum as usize {
-                                return_post_blocks.push(post_block.clone());
-                                // own PoST block is certified
-                                if (self
-                                    .acs_fin
+            let vote_block_author = vote.vote_creator();
+            let vote_public_key = self.committee.get_public_key(vote.author());
+            let Some(vote_public_key) = vote_public_key else {
+                tracing::warn!("Unknown vote author {}", vote.author());
+                continue;
+            };
+            if vote_block_author == self.authority {
+                // we handle vote for ourself
+                if let Some(post_block) = self.post_blocks.get_mut(&self.authority) {
+                    // check if the vote is for our own PoST block
+                    if post_block.get_meta_post_block().digest()
+                        == vote.meta_post_block.digest()
+                    {
+                        // if we already have enough signatures, ignore the vote to avoid different PoST blocks
+                        if post_block.signatures.len() >= acs_quorum as usize {
+                            continue;
+                        }
+                        // add the signature to the PoST block
+                        post_block.update_signature(vote_public_key.clone(), vote.signature);
+                        if post_block.signatures.len() >= acs_quorum as usize {
+                            return_post_blocks.push(post_block.clone());
+                            // own PoST block is certified
+                            if (self
+                                .acs_fin
+                                .mvbas
+                                .get(&self.authority)
+                                .unwrap()
+                                .proposal
+                                .count_ones() as u64)
+                                >= acs_quorum
+                            {
+                                // note that we don't change the input of the MVBA protocol
+                                tracing::info!("MVBA already reached quorum");
+                                // return;
+                            } else {
+                                self.acs_fin
                                     .mvbas
-                                    .get(&self.authority)
+                                    .get_mut(&self.authority)
                                     .unwrap()
-                                    .proposal
-                                    .count_ones() as u64)
-                                    >= acs_quorum
-                                {
-                                    // note that we don't change the input of the MVBA protocol
-                                    tracing::info!("MVBA already reached quorum");
-                                    // return;
-                                } else {
-                                    self.acs_fin
-                                        .mvbas
-                                        .get_mut(&self.authority)
-                                        .unwrap()
-                                        .proposal |= 1 << self.authority;
-                                }
+                                    .proposal |= 1 << self.authority;
                             }
                         }
                     }
-                } else {
-                    // we handle meta post block from other peer
-                    if self.add_meta_post_block(vote.meta_post_block.clone()) {
-                        // this meta post block is valid
-                        let peer_post_block = CertifiedPoSTBlockData::new(
-                            vote.meta_post_block.stuck_round,
-                            vote.meta_post_block.stuck_block,
-                            vote.meta_post_block.seen_blocks,
-                            Vec::new(),
-                        );
-                        return_post_blocks.push(peer_post_block);
-                    }
+                }
+            } else {
+                // we handle meta post block from other peer
+                if self.add_meta_post_block(vote.meta_post_block.clone()) {
+                    // this meta post block is valid
+                    let peer_post_block = CertifiedPoSTBlockData::new(
+                        vote.meta_post_block.stuck_round,
+                        vote.meta_post_block.stuck_block,
+                        vote.meta_post_block.seen_blocks,
+                        Vec::new(),
+                    );
+                    return_post_blocks.push(peer_post_block);
                 }
             }
+
         }
         return_post_blocks
     }
