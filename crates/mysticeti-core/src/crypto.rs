@@ -15,7 +15,7 @@ use zeroize::Zeroize;
 use crate::types::Vote;
 use crate::{
     acs_types::{
-        ABARoundNumber, BinaryValue, CertifiedMVBA, MVBAVote, MetaPoSTBlockData, PisaABAAux,
+        BinaryValue, CertifiedMVBA, FINMVBAView, MVBAVote, MetaPoSTBlockData, PisaABAAux,
         PisaABABval, PoSTBlockVote, MVBA,
     },
     data::Data,
@@ -234,24 +234,25 @@ impl MVBADigest {
 pub type PisaABAHasher = blake2::Blake2b<digest::consts::U32>;
 impl PisaABADigest {
     pub fn new(
-        aba_round: RoundNumber,
+        view: FINMVBAView,
         p1: BinaryValue,
         p2: BinaryValue,
         authority: AuthorityIndex,
     ) -> Self {
         let mut hasher = PisaABAHasher::default();
-        Self::digest_without_signature(&mut hasher, aba_round, p1, p2, authority);
+        Self::digest_without_signature(&mut hasher, view, p1, p2, authority);
         Self(hasher.finalize().into())
     }
 
     fn digest_without_signature(
         hasher: &mut PisaABAHasher,
-        aba_round: RoundNumber,
+        view: FINMVBAView,
         p1: BinaryValue,
         p2: BinaryValue,
         authority: AuthorityIndex,
     ) {
-        aba_round.crypto_hash(hasher);
+        view.mvba_round.crypto_hash(hasher);
+        view.aba_round.crypto_hash(hasher);
         p1.crypto_hash(hasher);
         p2.crypto_hash(hasher);
         authority.crypto_hash(hasher);
@@ -370,7 +371,7 @@ impl PublicKey {
         let mut hasher = PisaABAHasher::default();
         PisaABADigest::digest_without_signature(
             &mut hasher,
-            pisa_aba_val.aba_round,
+            pisa_aba_val.view.clone(),
             pisa_aba_val.est,
             pisa_aba_val.maj,
             pisa_aba_val.authority,
@@ -387,7 +388,7 @@ impl PublicKey {
         let mut hasher = PisaABAHasher::default();
         PisaABADigest::digest_without_signature(
             &mut hasher,
-            pisa_aba_aux.aba_round,
+            pisa_aba_aux.view.clone(),
             pisa_aba_aux.aux1,
             pisa_aba_aux.aux2,
             pisa_aba_aux.authority,
@@ -460,13 +461,13 @@ impl Signer {
 
     pub fn sign_pisa_aba_bval(
         &self,
-        aba_round: ABARoundNumber,
+        view: FINMVBAView,
         est: BinaryValue,
         maj: BinaryValue,
         authority: AuthorityIndex,
     ) -> SignatureBytes {
         let mut hasher = PisaABAHasher::default();
-        PisaABADigest::digest_without_signature(&mut hasher, aba_round, est, maj, authority);
+        PisaABADigest::digest_without_signature(&mut hasher, view, est, maj, authority);
         let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
         let signature = self.0.sign(digest.as_ref());
         SignatureBytes(signature.to_bytes())
@@ -474,13 +475,13 @@ impl Signer {
 
     pub fn sign_pisa_aba_aux(
         &self,
-        aba_round: ABARoundNumber,
+        view: FINMVBAView,
         aux1: BinaryValue,
         aux2: BinaryValue,
         authority: AuthorityIndex,
     ) -> SignatureBytes {
         let mut hasher = PisaABAHasher::default();
-        PisaABADigest::digest_without_signature(&mut hasher, aba_round, aux1, aux2, authority);
+        PisaABADigest::digest_without_signature(&mut hasher, view, aux1, aux2, authority);
         let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
         let signature = self.0.sign(digest.as_ref());
         SignatureBytes(signature.to_bytes())

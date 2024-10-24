@@ -11,7 +11,7 @@ use eyre::{bail, Ok};
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::BTreeMap};
 
-pub type MVBARoundNumber = u32;
+pub type MVBARoundNumber = u64;
 pub type ABARoundNumber = u64;
 pub type BinaryValue = u64; // b=0, b=1, b=2 (None)
 pub type MVBA = u128;
@@ -316,8 +316,8 @@ impl CertifiedMVBA {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FINMVBAView {
-    mvba_round: MVBARoundNumber, // the (FIN) mvba round number
-    aba_round: ABARoundNumber,   // the (Pisa) aba round number
+    pub mvba_round: MVBARoundNumber, // the (FIN) mvba round number
+    pub aba_round: ABARoundNumber,   // the (Pisa) aba round number
 }
 
 impl FINMVBAView {
@@ -329,7 +329,7 @@ impl FINMVBAView {
     }
 }
 pub struct PisaABABval {
-    pub aba_round: ABARoundNumber, // the aba round number
+    pub view: FINMVBAView, // the aba round number
     pub est: BinaryValue,
     pub maj: BinaryValue,
     pub authority: AuthorityIndex,
@@ -338,15 +338,15 @@ pub struct PisaABABval {
 
 impl PisaABABval {
     pub fn new(
-        aba_round: ABARoundNumber,
+        view: FINMVBAView,
         est: BinaryValue,
         maj: BinaryValue,
         authority: AuthorityIndex,
         signer: Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_bval(aba_round, est, maj, authority);
+        let signature = signer.sign_pisa_aba_bval(view.clone(), est, maj, authority);
         Self {
-            aba_round,
+            view,
             est,
             maj,
             authority,
@@ -371,7 +371,7 @@ impl PisaABABval {
 }
 
 pub struct PisaABAAux {
-    pub aba_round: ABARoundNumber, // the aba round number
+    pub view: FINMVBAView, // the aba round number
     pub aux1: BinaryValue,
     pub aux2: BinaryValue,
     pub authority: AuthorityIndex,
@@ -380,15 +380,15 @@ pub struct PisaABAAux {
 
 impl PisaABAAux {
     pub fn new(
-        aba_round: ABARoundNumber,
+        view: FINMVBAView,
         aux1: BinaryValue,
         aux2: BinaryValue,
         authority: AuthorityIndex,
         signer: Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_aux(aba_round, aux1, aux2, authority);
+        let signature = signer.sign_pisa_aba_aux(view.clone(), aux1, aux2, authority);
         Self {
-            aba_round,
+            view,
             aux1,
             aux2,
             authority,
