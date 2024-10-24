@@ -3,9 +3,9 @@
 
 use crate::{
     committee::Committee,
-    crypto::{MetaPoSTBlockDigest, PublicKey, CertifiedMVBADigest, SignatureBytes, Signer},
+    crypto::{MetaPoSTBlockDigest, MVBADigest, PublicKey, SignatureBytes, Signer},
     data::Data,
-    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
 use eyre::{bail, Ok};
 use serde::{Deserialize, Serialize};
@@ -194,33 +194,68 @@ impl CertifiedPoSTBlockData {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UncertifiedMVBA {
-    pub authority: AuthorityIndex,
+pub struct MVBAProposal {
+    pub authority: AuthorityIndex,  // the creator of this proposal
     pub round: RoundNumber, // the last round agreed by the ACS mode
     pub proposal: MVBA,
-    pub signature: SignatureBytes, // my signature on this mvba proposal
 }
 
-impl UncertifiedMVBA {
-    pub fn new_with_signer(
-        authority: AuthorityIndex,
-        round: RoundNumber,
-        proposal: MVBA,
-        signer: Signer,
-    ) -> Self {
-        let signature = signer.sign_mvba_proposal(authority, round, proposal);
+impl MVBAProposal {
+    pub fn new(authority: AuthorityIndex, round: RoundNumber, proposal: MVBA) -> Self {
         Self {
             authority,
             round,
             proposal,
+        }
+    }
+
+    pub fn digest(&self) -> MVBADigest {
+        MVBADigest::new(self.authority, self.round, self.proposal)
+    }
+
+    pub fn author(&self) -> AuthorityIndex {
+        self.authority
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MVBAVote {
+    pub mvba_proposal: MVBAProposal,
+    pub voter: AuthorityIndex,  // the signer of this MVBAProposal
+    pub signature: SignatureBytes, // my signature on this mvba proposal
+}
+
+impl MVBAVote {
+    pub fn new_with_signer(
+        mvba_proposal: MVBAProposal,
+        voter: AuthorityIndex,
+        signer: Signer,
+    ) -> Self {
+        let signature = signer.sign_mvba_proposal(mvba_proposal.authority, mvba_proposal.round, mvba_proposal.proposal);
+        Self {
+            mvba_proposal,
+            voter,
             signature,
         }
     }
 
-    pub fn digest(&self) -> CertifiedMVBADigest {
-        CertifiedMVBADigest::new(self.authority, self.round, self.proposal)
+    pub fn mvba_creator(&self) -> AuthorityIndex {
+        self.mvba_proposal.authority
+    }
+
+    pub fn mvba_voter(&self) -> AuthorityIndex {
+        self.voter
+    }
+
+    pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
+        let pub_key = committee.get_public_key(self.mvba_voter());
+        let Some(pub_key) = pub_key else {
+            bail!("Unknown pisa aba bval author {}", self.mvba_voter())
+        };
+        if let Err(e) = pub_key.verify_mvba_vote(self) {
+            bail!("pisa aba bval signature verification has failed: {:?}", e);
+        }
+        Ok(())
     }
 }
 
@@ -248,6 +283,14 @@ impl CertifiedMVBA {
         }
     }
 
+    pub fn is_certified(&self, acs_quorum: Stake) -> bool {
+        self.signatures.len() >= acs_quorum as usize
+    }
+
+    pub fn get_mvba_proposal(&self) -> MVBAProposal {
+        MVBAProposal::new(self.authority, self.round, self.proposal)
+    }
+    
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
         if self.signatures.len() < committee.quorum_threshold() as usize {
             eyre::bail!("Not enough signatures");
@@ -257,7 +300,7 @@ impl CertifiedMVBA {
                 eyre::bail!("Unknown authority");
             }
             if author
-                .verify_reliable_mvba_with_signature(self, signature)
+                .verify_certified_mvba_with_signature(self, signature)
                 .is_err()
             {
                 eyre::bail!("Invalid signature");
@@ -393,6 +436,10 @@ impl ACSFin {
             raba_bvals: BTreeMap::new(),
             raba_aux: BTreeMap::new(),
         }
+    }
+
+    pub fn get_own_mvba(&self) -> &CertifiedMVBA {
+        self.mvbas.get(&self.authority).unwrap()
     }
 
     pub fn raba_propose(&self) {

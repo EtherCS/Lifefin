@@ -15,8 +15,7 @@ use zeroize::Zeroize;
 use crate::types::Vote;
 use crate::{
     acs_types::{
-        ABARoundNumber, BinaryValue, MetaPoSTBlockData, PisaABAAux, PisaABABval, PoSTBlockVote,
-        CertifiedMVBA, MVBA,
+        ABARoundNumber, BinaryValue, CertifiedMVBA, MetaPoSTBlockData, PisaABAAux, PisaABABval, PoSTBlockVote, MVBAVote, MVBA
     },
     data::Data,
     serde::{ByteRepr, BytesVisitor},
@@ -43,7 +42,7 @@ pub struct PoSTBlockDigest([u8; POST_BLOCK_DIGEST_SIZE]);
 pub struct MetaPoSTBlockDigest([u8; META_POST_BLOCK_DIGEST_SIZE]);
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
-pub struct CertifiedMVBADigest([u8; RELIABLE_MVBA_DIGEST_SIZE]);
+pub struct MVBADigest([u8; RELIABLE_MVBA_DIGEST_SIZE]);
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
 pub struct PisaABADigest([u8; PISA_ABA_DIGEST_SIZE]);
@@ -153,17 +152,17 @@ impl BlockDigest {
 
 pub type PoSTBlockHasher = blake2::Blake2b<digest::consts::U32>;
 impl PoSTBlockDigest {
-    pub fn new(
-        stuck_round: RoundNumber,
-        stuck_block: &Data<StatementBlock>,
-        seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
-        signature: &SignatureBytes,
-    ) -> Self {
-        let mut hasher = PoSTBlockHasher::default();
-        Self::digest_without_signature(&mut hasher, stuck_round, stuck_block, seen_blocks);
-        hasher.update(signature);
-        Self(hasher.finalize().into())
-    }
+    // pub fn new(
+    //     stuck_round: RoundNumber,
+    //     stuck_block: &Data<StatementBlock>,
+    //     seen_blocks: &BTreeMap<AuthorityIndex, BlockReference>,
+    //     signature: &SignatureBytes,
+    // ) -> Self {
+    //     let mut hasher = PoSTBlockHasher::default();
+    //     Self::digest_without_signature(&mut hasher, stuck_round, stuck_block, seen_blocks);
+    //     hasher.update(signature);
+    //     Self(hasher.finalize().into())
+    // }
 
     fn digest_without_signature(
         hasher: &mut PoSTBlockHasher,
@@ -207,20 +206,20 @@ impl MetaPoSTBlockDigest {
     }
 }
 
-pub type CertifiedMVBAHasher = blake2::Blake2b<digest::consts::U32>;
-impl CertifiedMVBADigest {
+pub type MVBAHasher = blake2::Blake2b<digest::consts::U32>;
+impl MVBADigest {
     pub fn new(
         authority: AuthorityIndex,
         round: RoundNumber, // the last round agreed by the ACS mode
         mvba: MVBA,
     ) -> Self {
-        let mut hasher = CertifiedMVBAHasher::default();
+        let mut hasher = MVBAHasher::default();
         Self::digest_without_signature(&mut hasher, authority, round, mvba);
         Self(hasher.finalize().into())
     }
 
     fn digest_without_signature(
-        hasher: &mut CertifiedMVBAHasher,
+        hasher: &mut MVBAHasher,
         authority: AuthorityIndex,
         round: RoundNumber, // the last round agreed by the ACS mode
         mvba: MVBA,
@@ -294,23 +293,6 @@ impl<T: AsBytes> CryptoHash for T {
 }
 
 impl PublicKey {
-    pub fn verify_reliable_mvba_with_signature(
-        &self,
-        reliable_mvba: &CertifiedMVBA,
-        signature: &SignatureBytes,
-    ) -> Result<(), ed25519_consensus::Error> {
-        let mut hasher = CertifiedMVBAHasher::default();
-        CertifiedMVBADigest::digest_without_signature(
-            &mut hasher,
-            reliable_mvba.authority,
-            reliable_mvba.round,
-            reliable_mvba.proposal.clone(),
-        );
-        let digest: [u8; BLOCK_DIGEST_SIZE] = hasher.finalize().into();
-        self.0
-            .verify(&Signature::from(signature.0), digest.as_ref())
-    }
-
     pub fn verify_meta_post_block_with_signature(
         &self,
         meta_post_block: &MetaPoSTBlockData,
@@ -342,6 +324,39 @@ impl PublicKey {
         );
         let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
         self.0.verify(&signature, digest.as_ref())
+    }
+
+    pub fn verify_mvba_vote(
+        &self,
+        mvba_vote: &MVBAVote,
+    ) -> Result<(), ed25519_consensus::Error> {
+        let signature = Signature::from(mvba_vote.signature.0);
+        let mut hasher = MVBAHasher::default();
+        MVBADigest::digest_without_signature(
+            &mut hasher,
+            mvba_vote.mvba_proposal.authority,
+            mvba_vote.mvba_proposal.round,
+            mvba_vote.mvba_proposal.proposal.clone(),
+        );
+        let digest: [u8; RELIABLE_MVBA_DIGEST_SIZE] = hasher.finalize().into();
+        self.0.verify(&signature, digest.as_ref())
+    }
+
+    pub fn verify_certified_mvba_with_signature(
+        &self,
+        certified_mvba: &CertifiedMVBA,
+        signature: &SignatureBytes,
+    ) -> Result<(), ed25519_consensus::Error> {
+        let mut hasher = MVBAHasher::default();
+        MVBADigest::digest_without_signature(
+            &mut hasher,
+            certified_mvba.authority,
+            certified_mvba.round,
+            certified_mvba.proposal.clone(),
+        );
+        let digest: [u8; BLOCK_DIGEST_SIZE] = hasher.finalize().into();
+        self.0
+            .verify(&Signature::from(signature.0), digest.as_ref())
     }
 
     pub fn verify_pisa_aba_bval(
@@ -433,8 +448,8 @@ impl Signer {
         round: RoundNumber,
         mvba: MVBA,
     ) -> SignatureBytes {
-        let mut hasher = CertifiedMVBAHasher::default();
-        CertifiedMVBADigest::digest_without_signature(&mut hasher, authority, round, mvba);
+        let mut hasher = MVBAHasher::default();
+        MVBADigest::digest_without_signature(&mut hasher, authority, round, mvba);
         let digest: [u8; RELIABLE_MVBA_DIGEST_SIZE] = hasher.finalize().into();
         let signature = self.0.sign(digest.as_ref());
         SignatureBytes(signature.to_bytes())

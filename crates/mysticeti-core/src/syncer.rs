@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
-    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA},
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA, MVBAVote},
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
@@ -95,6 +95,14 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .utilization_timer
             .utilization_timer("Syncer::add_post_block_votes");
         self.core.add_post_block_votes(votes);
+    }
+
+    pub fn add_mvba_votes(&mut self, mvba_votes: Vec<MVBAVote>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_uncertified_mvba");
+        self.core.add_mvba_votes(mvba_votes);
     }
 
     pub fn add_certified_mvba(&mut self, mvbas: Vec<CertifiedMVBA>) {

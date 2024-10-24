@@ -235,9 +235,10 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     );
                     inner.syncer.add_post_blocks(vec![post_block]).await;
                 }
-                NetworkMessage::MVBAProposal(mvba_proposal) => {
+                NetworkMessage::MVBAVote(mvba_vote) => {
                     // todo: verify and sign it
-                    tracing::debug!("Received mvba proposal {:?} from {}", mvba_proposal, peer);
+                    tracing::debug!("Received mvba vote {:?} from {}", mvba_vote, peer);
+                    inner.syncer.add_mvba_vote(vec![mvba_vote]).await;
                 }
                 NetworkMessage::CertifiedMVBA(certified_mvba) => {
                     tracing::debug!("Received certified mvba {:?} from {}", certified_mvba, peer);

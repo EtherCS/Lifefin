@@ -22,7 +22,7 @@ use tokio::{
 };
 
 use crate::{
-    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA, UncertifiedMVBA},
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA, MVBAVote},
     config::NodePublicConfig,
     data::Data,
     metrics::{print_network_address_table, Metrics},
@@ -43,7 +43,7 @@ pub enum NetworkMessage {
     BlockNotFound(Vec<BlockReference>),
     ProofOfStuckBlockVote(PoSTBlockVote),
     ProofOfStuckBlock(CertifiedPoSTBlockData),
-    MVBAProposal(UncertifiedMVBA),
+    MVBAVote(MVBAVote),
     CertifiedMVBA(CertifiedMVBA),
 }
 

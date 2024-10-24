@@ -14,7 +14,7 @@ use minibytes::Bytes;
 
 use crate::{
     acs_manager::ACSManager,
-    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA},
+    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, PoSTBlockVote, MVBAProposal, MVBAVote},
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -277,19 +277,22 @@ impl<H: BlockHandler> Core<H> {
                 .expect("ACS manager fails to write post blocks")
                 .add_post_block(post_block, self.acs_quorum);
         }
-        // if we receive 2f+1 post blocks, we also create our post block and enter ACS mode
+        // if we receive 2f+1 post blocks, we are ready to propose MVBA
         if self
             .acs_manager
             .read()
             .expect("ACS manager fails to read")
             .ready_for_mvba(self.acs_quorum)
-            && self.consensus_mode == ConsensusMode::Optimistic
         {
-            self.switch_to_fallback();
+            self.try_broadcast_mvba();
+            // if we are not in fallback mode, switch to fallback mode
+            if self.consensus_mode == ConsensusMode::Optimistic {
+                self.switch_to_fallback();
+            }
         }
     }
 
-    // handle vote for own ACS block here
+    /// handle vote for own ACS block here
     pub fn add_post_block_votes(&mut self, votes: Vec<PoSTBlockVote>) {
         let _timer = self
             .metrics
@@ -318,6 +321,66 @@ impl<H: BlockHandler> Core<H> {
                     self.signer.clone(),
                 );
                 rt.block_on(self.send_peer(peer, NetworkMessage::ProofOfStuckBlockVote(vote)));
+            }
+        }
+    }
+
+    /// We broadcast own MVBA here
+    fn try_broadcast_mvba(&mut self) {
+        let mvba = self
+            .acs_manager
+            .read()
+            .expect("ACS manager fails to read")
+            .acs_fin
+            .get_own_mvba()
+            .clone();
+        let rt = Runtime::new().unwrap();
+        // if we are certified, broadcast mvba
+        if mvba.is_certified(self.acs_quorum) {
+            rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(mvba)));
+        } else {
+            let mvba_proposal = MVBAProposal::new(
+                mvba.authority,
+                mvba.round,
+                mvba.proposal,
+            );
+            let vote = MVBAVote::new_with_signer(
+                mvba_proposal.clone(),
+                self.authority,
+                self.signer.clone(),
+            );
+            rt.block_on(self.broadcast(NetworkMessage::MVBAVote(vote)));
+        }
+    }
+
+    /// Handle MVBA proposal here
+    pub fn add_mvba_votes(&mut self, mvba_votes: Vec<MVBAVote>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_mvba_votes");
+        let new_mvbas = self
+            .acs_manager
+            .write()
+            .expect("ACS manager fails to write mvba votes")
+            .add_mvba_votes(mvba_votes, self.acs_quorum);
+        // if we just received enough votes for a new mvba, broadcast it
+        for new_mvba in new_mvbas {
+            let rt = Runtime::new().unwrap();
+            let peer = new_mvba.authority;
+            // note that we have enough signatures for our mvba at this point
+            if peer == self.authority {
+                tracing::debug!("Broadcasting own mvba {:?}", new_mvba);
+                // this is our mvba
+                rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(new_mvba.clone())));
+            } else {
+                // this is a mvba vote from other peer
+                let vote = MVBAVote::new_with_signer(
+                    new_mvba.get_mvba_proposal(),
+                    self.authority,
+                    self.signer.clone(),
+                );
+                rt.block_on(self.send_peer(peer, NetworkMessage::MVBAVote(vote)));
             }
         }
     }

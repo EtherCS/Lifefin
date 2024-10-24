@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc, thread};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA},
+    acs_types::{CertifiedPoSTBlockData, PoSTBlockVote, CertifiedMVBA, MVBAVote},
     block_handler::BlockHandler,
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},
@@ -37,6 +37,7 @@ enum CoreThreadCommand {
     ConnectionDropped(AuthorityIndex, oneshot::Sender<()>),
     AddPoSTBlocks(Vec<CertifiedPoSTBlockData>, oneshot::Sender<()>),
     AddPoSTBlockVotes(Vec<PoSTBlockVote>, oneshot::Sender<()>),
+    AddMVBAVote(Vec<MVBAVote>, oneshot::Sender<()>),
     AddCertifiedMVBA(Vec<CertifiedMVBA>, oneshot::Sender<()>),
 }
 
@@ -73,6 +74,13 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
     pub async fn add_post_blocks(&self, blocks: Vec<CertifiedPoSTBlockData>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddPoSTBlocks(blocks, sender))
+            .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_mvba_vote(&self, mvba_votes: Vec<MVBAVote>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddMVBAVote(mvba_votes, sender))
             .await;
         receiver.await.expect("core thread is not expected to stop");
     }
@@ -169,6 +177,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                 }
                 CoreThreadCommand::AddPoSTBlockVotes(post_block_votes, sender) => {
                     self.syncer.add_post_block_votes(post_block_votes);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddMVBAVote(mvba_votes, sender) => {
+                    self.syncer.add_mvba_votes(mvba_votes);
                     sender.send(()).ok();
                 }
                 CoreThreadCommand::AddCertifiedMVBA(certified_mvbas, sender) => {
