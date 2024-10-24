@@ -9,11 +9,11 @@ use crate::{
 };
 use eyre::{bail, Ok};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::collections::BTreeMap;
 
-pub type View = u32;
-
+pub type MVBARoundNumber = u32;
+pub type ABARoundNumber = u64;
+pub type BinaryValue = u64; // b=0, b=1, b=2 (None)
 pub type MVBA = u128;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,7 +168,6 @@ impl CertifiedPoSTBlockData {
     }
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReliableMVBAProposal {
     pub authority: AuthorityIndex,
@@ -241,22 +240,119 @@ impl ReliableMVBA {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FINMVBAView {
+    mvba_round: MVBARoundNumber, // the (FIN) mvba round number
+    aba_round: ABARoundNumber,   // the (Pisa) aba round number
+}
+
+impl FINMVBAView {
+    pub fn new() -> Self {
+        Self {
+            mvba_round: 0,
+            aba_round: 0,
+        }
+    }
+}
+pub struct PisaABABval {
+    pub aba_round: ABARoundNumber, // the aba round number
+    pub est: BinaryValue,
+    pub maj: BinaryValue,
+    pub author_key: PublicKey,
+    pub signature: SignatureBytes,
+}
+
+impl PisaABABval {
+    pub fn new(
+        aba_round: ABARoundNumber,
+        est: BinaryValue,
+        maj: BinaryValue,
+        author_key: PublicKey,
+        signer: Signer,
+    ) -> Self {
+        let signature = signer.sign_pisa_aba_bval(aba_round, est, maj);
+        Self {
+            aba_round,
+            est,
+            maj,
+            author_key,
+            signature,
+        }
+    }
+    pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
+        if !committee.known_authority_key(&self.author_key) {
+            bail!("Unknown block author {:?}", self.author_key)
+        }
+        if let Err(e) = self.author_key.verify_pisa_aba_bval(self) {
+            bail!("Pisa aba bval signature verification has failed: {:?}", e);
+        }
+        Ok(())
+    }
+}
+
+pub struct PisaABAAux {
+    pub aba_round: ABARoundNumber, // the aba round number
+    pub aux1: BinaryValue,
+    pub aux2: BinaryValue,
+    pub author_key: PublicKey,
+    pub signature: SignatureBytes,
+}
+
+impl PisaABAAux {
+    pub fn new(
+        aba_round: ABARoundNumber,
+        aux1: BinaryValue,
+        aux2: BinaryValue,
+        author_key: PublicKey,
+        signer: Signer,
+    ) -> Self {
+        let signature = signer.sign_pisa_aba_aux(aba_round, aux1, aux2);
+        Self {
+            aba_round,
+            aux1,
+            aux2,
+            author_key,
+            signature,
+        }
+    }
+    pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
+        if !committee.known_authority_key(&self.author_key) {
+            bail!("Unknown block author {:?}", self.author_key)
+        }
+        if let Err(e) = self.author_key.verify_pisa_aba_aux(self) {
+            bail!("Pisa aba aux signature verification has failed: {:?}", e);
+        }
+        Ok(())
+    }
+}
 pub struct ACSFin {
-    authority: AuthorityIndex,
-    committee: Committee,
-    view: View,                                   // equal to round number in the paper
-    round: RoundNumber,                           // the last round agreed by the ACS mode
-    mvbas: HashMap<AuthorityIndex, ReliableMVBA>, // MVBA proposals received from all nodes
+    pub authority: AuthorityIndex,
+    pub committee: Committee,
+    pub last_acs_round: RoundNumber, // the last round agreed by the ACS mode
+    pub mvbas: BTreeMap<AuthorityIndex, ReliableMVBA>, // MVBA proposals received from all nodes
+    /* the following data is for MVBA */
+    pub mvba_view: FINMVBAView, // the current MVBA view
+    pub raba_bvals: BTreeMap<FINMVBAView, BTreeMap<AuthorityIndex, PisaABABval>>, // record the binary value proposed by each node in each MVBA round/ABA round
+    pub raba_aux: BTreeMap<FINMVBAView, BTreeMap<AuthorityIndex, PisaABAAux>>, // record the auxiliary information proposed by each node in each MVBA round/ABA round
 }
 
 impl ACSFin {
-    pub fn new(authority: AuthorityIndex, committee: Committee) -> Self {
+    pub fn new(
+        authority: AuthorityIndex,
+        committee: Committee,
+        last_acs_round: RoundNumber,
+    ) -> Self {
+        let mut mvbas = BTreeMap::new();
+        let my_reliable_mvba = ReliableMVBA::new(authority, last_acs_round, 0);
+        mvbas.insert(authority, my_reliable_mvba);
         Self {
             authority,
             committee,
-            view: 0,
-            round: 0,
-            mvbas: HashMap::new(),
+            last_acs_round,
+            mvbas,
+            mvba_view: FINMVBAView::new(),
+            raba_bvals: BTreeMap::new(),
+            raba_aux: BTreeMap::new(),
         }
     }
 
@@ -272,8 +368,16 @@ impl ACSFin {
         // todo
     }
 
+    /// todo: random
     /// Current election: round robin
     pub fn election(&self) -> AuthorityIndex {
-        self.view as AuthorityIndex % self.committee.len() as AuthorityIndex
+        self.mvba_view.mvba_round as AuthorityIndex % self.committee.len() as AuthorityIndex
+    }
+
+    /// todo: random
+    /// Current election: coin flip
+    pub fn coin(&self) -> BinaryValue {
+        // todo
+        self.mvba_view.aba_round as BinaryValue % 2
     }
 }

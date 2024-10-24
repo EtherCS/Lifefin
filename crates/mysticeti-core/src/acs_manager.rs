@@ -1,5 +1,5 @@
 use crate::{
-    acs_types::{CertifiedPoSTBlockData, MetaPoSTBlockData, PoSTBlockVote, ReliableMVBA},
+    acs_types::{ACSFin, CertifiedPoSTBlockData, MetaPoSTBlockData, PoSTBlockVote},
     committee::Committee,
     crypto::PublicKey,
     data::Data,
@@ -15,7 +15,7 @@ pub struct ACSManager {
     round: RoundNumber,   // the last round agreed by the ACS mode
     last_seen_meta_post_blocks: HashMap<AuthorityIndex, MetaPoSTBlockData>,
     post_blocks: HashMap<AuthorityIndex, CertifiedPoSTBlockData>,
-    mvba: ReliableMVBA, // the MVBA proposal of the node
+    acs_fin: ACSFin, // manage FIN messages
 }
 
 impl ACSManager {
@@ -28,11 +28,11 @@ impl ACSManager {
         Self {
             authority,
             public_key,
-            committee,
+            committee: committee.clone(),
             round,
             last_seen_meta_post_blocks: HashMap::new(),
             post_blocks: HashMap::new(),
-            mvba: ReliableMVBA::new(authority, round, 0),
+            acs_fin: ACSFin::new(authority, committee, round),
         }
     }
 
@@ -87,12 +87,24 @@ impl ACSManager {
                         return;
                     }
                     self.post_blocks.insert(authority, post_block);
-                    if (self.mvba.proposal.count_ones() as u64) >= acs_quorum {
+                    if (self
+                        .acs_fin
+                        .mvbas
+                        .get(&self.authority)
+                        .unwrap()
+                        .proposal
+                        .count_ones() as u64)
+                        >= acs_quorum
+                    {
                         // note that we don't change the input of the MVBA protocol
                         tracing::info!("MVBA already reached quorum");
                         // return;
                     } else {
-                        self.mvba.proposal |= 1 << authority;
+                        self.acs_fin
+                            .mvbas
+                            .get_mut(&self.authority)
+                            .unwrap()
+                            .proposal |= 1 << authority;
                     }
                 }
             }
@@ -171,11 +183,24 @@ impl ACSManager {
                             if post_block.signatures.len() >= acs_quorum as usize {
                                 return_post_blocks.push(post_block.clone());
                                 // own PoST block is certified
-                                if (self.mvba.proposal.count_ones() as u64) >= acs_quorum {
+                                if (self
+                                    .acs_fin
+                                    .mvbas
+                                    .get(&self.authority)
+                                    .unwrap()
+                                    .proposal
+                                    .count_ones() as u64)
+                                    >= acs_quorum
+                                {
                                     // note that we don't change the input of the MVBA protocol
                                     tracing::info!("MVBA already reached quorum");
+                                    // return;
                                 } else {
-                                    self.mvba.proposal |= 1 << self.authority;
+                                    self.acs_fin
+                                        .mvbas
+                                        .get_mut(&self.authority)
+                                        .unwrap()
+                                        .proposal |= 1 << self.authority;
                                 }
                             }
                         }
@@ -198,8 +223,14 @@ impl ACSManager {
         return_post_blocks
     }
 
-    pub fn ready_for_mvba(&self, committee: &Committee) -> bool {
-        (self.mvba.proposal.count_ones() as u64) >= committee.quorum_threshold()
+    pub fn ready_for_mvba(&self, acs_quorum: Stake) -> bool {
+        self.acs_fin
+            .mvbas
+            .get(&self.authority)
+            .unwrap()
+            .proposal
+            .count_ones() as u64
+            >= acs_quorum
     }
 
     pub fn authority(&self) -> AuthorityIndex {

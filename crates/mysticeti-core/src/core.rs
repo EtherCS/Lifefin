@@ -282,7 +282,7 @@ impl<H: BlockHandler> Core<H> {
             .acs_manager
             .read()
             .expect("ACS manager fails to read")
-            .ready_for_mvba(&self.committee)
+            .ready_for_mvba(self.acs_quorum)
             && self.consensus_mode == ConsensusMode::Optimistic
         {
             self.switch_to_fallback();
@@ -363,6 +363,7 @@ impl<H: BlockHandler> Core<H> {
             );
             rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlockVote(vote)));
         }
+        // todo: broadcast uncertified mvba to other peers
         tracing::info!("Switching to Fallback mode");
         self.consensus_mode = ConsensusMode::Fallback;
     }

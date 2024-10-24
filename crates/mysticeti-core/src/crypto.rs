@@ -14,7 +14,10 @@ use zeroize::Zeroize;
 #[cfg(not(test))]
 use crate::types::Vote;
 use crate::{
-    acs_types::{MetaPoSTBlockData, PoSTBlockVote, ReliableMVBA, MVBA},
+    acs_types::{
+        ABARoundNumber, BinaryValue, MetaPoSTBlockData, PisaABAAux, PisaABABval, PoSTBlockVote,
+        ReliableMVBA, MVBA,
+    },
     data::Data,
     serde::{ByteRepr, BytesVisitor},
     types::{
@@ -28,6 +31,7 @@ pub const BLOCK_DIGEST_SIZE: usize = 32;
 pub const POST_BLOCK_DIGEST_SIZE: usize = 32;
 pub const META_POST_BLOCK_DIGEST_SIZE: usize = 32;
 pub const RELIABLE_MVBA_DIGEST_SIZE: usize = 32;
+pub const PISA_ABA_DIGEST_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
 pub struct BlockDigest([u8; BLOCK_DIGEST_SIZE]);
@@ -40,6 +44,9 @@ pub struct MetaPoSTBlockDigest([u8; META_POST_BLOCK_DIGEST_SIZE]);
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
 pub struct ReliableMVBADigest([u8; RELIABLE_MVBA_DIGEST_SIZE]);
+
+#[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
+pub struct PisaABADigest([u8; PISA_ABA_DIGEST_SIZE]);
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct PublicKey(ed25519_consensus::VerificationKey);
@@ -224,6 +231,25 @@ impl ReliableMVBADigest {
     }
 }
 
+pub type PisaABAHasher = blake2::Blake2b<digest::consts::U32>;
+impl PisaABADigest {
+    pub fn new(aba_round: RoundNumber, p1: BinaryValue, p2: BinaryValue) -> Self {
+        let mut hasher = PisaABAHasher::default();
+        Self::digest_without_signature(&mut hasher, aba_round, p1, p2);
+        Self(hasher.finalize().into())
+    }
+
+    fn digest_without_signature(
+        hasher: &mut PisaABAHasher,
+        aba_round: RoundNumber,
+        p1: BinaryValue,
+        p2: BinaryValue,
+    ) {
+        aba_round.crypto_hash(hasher);
+        p1.crypto_hash(hasher);
+        p2.crypto_hash(hasher);
+    }
+}
 pub trait AsBytes {
     // This is pretty much same as AsRef<[u8]>
     //
@@ -316,6 +342,38 @@ impl PublicKey {
         self.0.verify(&signature, digest.as_ref())
     }
 
+    pub fn verify_pisa_aba_bval(
+        &self,
+        pisa_aba_val: &PisaABABval,
+    ) -> Result<(), ed25519_consensus::Error> {
+        let signature = Signature::from(pisa_aba_val.signature.0);
+        let mut hasher = PisaABAHasher::default();
+        PisaABADigest::digest_without_signature(
+            &mut hasher,
+            pisa_aba_val.aba_round,
+            pisa_aba_val.est,
+            pisa_aba_val.maj,
+        );
+        let digest: [u8; PISA_ABA_DIGEST_SIZE] = hasher.finalize().into();
+        self.0.verify(&signature, digest.as_ref())
+    }
+
+    pub fn verify_pisa_aba_aux(
+        &self,
+        pisa_aba_aux: &PisaABAAux,
+    ) -> Result<(), ed25519_consensus::Error> {
+        let signature = Signature::from(pisa_aba_aux.signature.0);
+        let mut hasher = PisaABAHasher::default();
+        PisaABADigest::digest_without_signature(
+            &mut hasher,
+            pisa_aba_aux.aba_round,
+            pisa_aba_aux.aux1,
+            pisa_aba_aux.aux2,
+        );
+        let digest: [u8; PISA_ABA_DIGEST_SIZE] = hasher.finalize().into();
+        self.0.verify(&signature, digest.as_ref())
+    }
+
     #[cfg(not(test))]
     pub fn verify_block(&self, block: &StatementBlock) -> Result<(), ed25519_consensus::Error> {
         let signature = Signature::from(block.signature().0);
@@ -374,6 +432,32 @@ impl Signer {
         let mut hasher = ReliableMVBAHasher::default();
         ReliableMVBADigest::digest_without_signature(&mut hasher, authority, round, mvba);
         let digest: [u8; RELIABLE_MVBA_DIGEST_SIZE] = hasher.finalize().into();
+        let signature = self.0.sign(digest.as_ref());
+        SignatureBytes(signature.to_bytes())
+    }
+
+    pub fn sign_pisa_aba_bval(
+        &self,
+        aba_round: ABARoundNumber,
+        est: BinaryValue,
+        maj: BinaryValue,
+    ) -> SignatureBytes {
+        let mut hasher = PisaABAHasher::default();
+        PisaABADigest::digest_without_signature(&mut hasher, aba_round, est, maj);
+        let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
+        let signature = self.0.sign(digest.as_ref());
+        SignatureBytes(signature.to_bytes())
+    }
+
+    pub fn sign_pisa_aba_aux(
+        &self,
+        aba_round: ABARoundNumber,
+        aux1: BinaryValue,
+        aux2: BinaryValue,
+    ) -> SignatureBytes {
+        let mut hasher = PisaABAHasher::default();
+        PisaABADigest::digest_without_signature(&mut hasher, aba_round, aux1, aux2);
+        let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
         let signature = self.0.sign(digest.as_ref());
         SignatureBytes(signature.to_bytes())
     }
