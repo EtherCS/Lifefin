@@ -14,7 +14,8 @@ refer to disseminator.disseminate_own_blocks
 - impl sending PoST blocks interface, refer to '''disseminate_own_blocks''' -> done
 - impl '''verify''' function for CertifiedPoSTBlockData -> done
 - impl '''add_post_blocks''' function for handling PoST blocks in core module  -> done
-- add signature for metapostblock
+- add signature for metapostblock -> done
 - impl ACS consensus mode after generate a PoST block
-    - handling MVBA input
+    - handling MVBA input -> done
     - impl MVBA
+- commit blocks and reset acs manager after ACS mode

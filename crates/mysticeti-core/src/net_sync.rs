@@ -238,11 +238,11 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 NetworkMessage::MVBAVote(mvba_vote) => {
                     // todo: verify and sign it
                     tracing::debug!("Received mvba vote {:?} from {}", mvba_vote, peer);
-                    inner.syncer.add_mvba_vote(vec![mvba_vote]).await;
+                    inner.syncer.add_mvba_votes(vec![mvba_vote]).await;
                 }
                 NetworkMessage::CertifiedMVBA(certified_mvba) => {
                     tracing::debug!("Received certified mvba {:?} from {}", certified_mvba, peer);
-                    // inner.syncer.add_certified_mvba(vec![certified_mvba]).await;
+                    inner.syncer.add_certified_mvbas(vec![certified_mvba]).await;
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);

@@ -381,6 +381,23 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
+    /// Handle certified MVBAs here
+    pub fn add_certified_mvbas(&mut self, mvbas: Vec<CertifiedMVBA>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_certified_mvbas");
+        for mvba in mvbas {
+            self.acs_manager
+                .write()
+                .expect("ACS manager fails to write mvbas")
+                .add_certified_mvba(mvba);
+        }
+        if self.acs_manager.read().expect("ACS manager fails to read").ready_for_fin(self.acs_quorum) {
+            // todo: now we enter the MVBA process of FIN protocol
+        }
+    }
+
     /// We switch to fallback mode if one of the following conditions is met:
     /// 1) receive 2f+1 post blocks
     /// 2) trigger acs timeout (which could be very long, said 10 minutes, in practice)

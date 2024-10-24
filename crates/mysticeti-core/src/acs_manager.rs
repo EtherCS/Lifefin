@@ -9,8 +9,8 @@ use crate::{
     types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
 
+use std::collections::HashMap;
 use std::{cmp::Ordering, collections::BTreeMap};
-use std::{collections::HashMap, hash::Hash};
 
 pub struct ACSManager {
     authority: AuthorityIndex,
@@ -92,6 +92,7 @@ impl ACSManager {
                         post_block.stuck_block.reference(),
                         e
                     );
+                    return;
                 } else {
                     if self.post_blocks.contains_key(&authority) {
                         tracing::debug!("PoST block from authority {} already received", authority);
@@ -123,6 +124,8 @@ impl ACSManager {
             }
         }
     }
+
+    // pub fn
 
     /// we will check the validity of the meta post block here
     fn add_meta_post_block(&mut self, meta_post_block: MetaPoSTBlockData) -> bool {
@@ -164,11 +167,16 @@ impl ACSManager {
     pub fn add_mvba_proposal(&mut self, mvba_proposal: MVBAProposal) -> bool {
         match mvba_proposal.round.cmp(&self.round) {
             // ignore a mvba proposal with a round less than or equal to the last ACS round
-            Ordering::Less | Ordering::Equal => {
+            Ordering::Less => {
+                return false;
+            }
+            // todo: may need to handle a future mvba proposal
+            Ordering::Greater => {
+                tracing::warn!("Received a mvba with a round larger than the last ACS round");
                 return false;
             }
             // receive a new mvba proposal
-            Ordering::Greater => {
+            Ordering::Equal => {
                 let authority = mvba_proposal.authority;
                 // todo: we currently only support 128 authorities
                 if authority > 128 {
@@ -334,6 +342,10 @@ impl ACSManager {
         return_mvbas
     }
 
+    pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) {
+        self.acs_fin.add_certified_mvba(mvba);
+    }
+
     pub fn ready_for_mvba(&self, acs_quorum: Stake) -> bool {
         self.acs_fin
             .mvbas
@@ -342,6 +354,10 @@ impl ACSManager {
             .proposal
             .count_ones() as u64
             >= acs_quorum
+    }
+
+    pub fn ready_for_fin(&self, acs_quorum: Stake) -> bool {
+        self.acs_fin.ready_for_fin(acs_quorum)
     }
 
     pub fn authority(&self) -> AuthorityIndex {

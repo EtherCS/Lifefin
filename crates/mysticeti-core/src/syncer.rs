@@ -101,12 +101,16 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
         let _timer = self
             .metrics
             .utilization_timer
-            .utilization_timer("Syncer::add_uncertified_mvba");
+            .utilization_timer("Syncer::add_mvba_votes");
         self.core.add_mvba_votes(mvba_votes);
     }
 
-    pub fn add_certified_mvba(&mut self, mvbas: Vec<CertifiedMVBA>) {
-        // todo: verify and add mvba to self.acs_fin
+    pub fn add_certified_mvbas(&mut self, mvbas: Vec<CertifiedMVBA>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_certified_mvbas");
+        self.core.add_certified_mvbas(mvbas);
     }
 
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {

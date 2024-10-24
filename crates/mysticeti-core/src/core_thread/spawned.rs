@@ -78,7 +78,7 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
         receiver.await.expect("core thread is not expected to stop");
     }
 
-    pub async fn add_mvba_vote(&self, mvba_votes: Vec<MVBAVote>) {
+    pub async fn add_mvba_votes(&self, mvba_votes: Vec<MVBAVote>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddMVBAVote(mvba_votes, sender))
             .await;
@@ -92,7 +92,7 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
         receiver.await.expect("core thread is not expected to stop");
     }
 
-    pub async fn add_certified_mvba(&self, mvbas: Vec<CertifiedMVBA>) {
+    pub async fn add_certified_mvbas(&self, mvbas: Vec<CertifiedMVBA>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddCertifiedMVBA(mvbas, sender))
             .await;
@@ -184,7 +184,7 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                     sender.send(()).ok();
                 }
                 CoreThreadCommand::AddCertifiedMVBA(certified_mvbas, sender) => {
-                    self.syncer.add_certified_mvba(certified_mvbas);
+                    self.syncer.add_certified_mvbas(certified_mvbas);
                     sender.send(()).ok();
                 }
             }

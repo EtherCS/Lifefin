@@ -9,7 +9,7 @@ use crate::{
 };
 use eyre::{bail, Ok};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{cmp::Ordering, collections::BTreeMap};
 
 pub type MVBARoundNumber = u32;
 pub type ABARoundNumber = u64;
@@ -444,6 +444,50 @@ impl ACSFin {
 
     pub fn get_own_mvba(&self) -> &CertifiedMVBA {
         self.mvbas.get(&self.authority).unwrap()
+    }
+
+    pub fn ready_for_fin(&self, acs_quorum: Stake) -> bool {
+        self.mvbas
+            .iter()
+            .filter(|(authority, mvba)| {
+                if **authority == self.authority {
+                    if mvba.signatures.len() as u64 >= acs_quorum {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                } else {
+                    // note that except for our own mvba, mvbas of other peers stored in acs_fin are certified, i.e., with 2f+1 signatures
+                    return true;
+                }
+            })
+            .count() as u64
+            >= acs_quorum
+    }
+
+    pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) {
+        match mvba.round.cmp(&self.last_acs_round) {
+            // ignore a mvba with a round equal to the last ACS round
+            Ordering::Less => {}
+            // todo: may need to handle a future certified mvba
+            Ordering::Greater => {
+                tracing::warn!("Received a mvba with a round larger than the last ACS round");
+            }
+            // receive a new mvba for this stuck round
+            Ordering::Equal => {
+                let authority = mvba.authority;
+                if let Err(e) = mvba.verify(&self.committee) {
+                    tracing::warn!("Invalid mvba from {}: {:?}", authority, e);
+                    return;
+                } else {
+                    if self.mvbas.contains_key(&authority) {
+                        tracing::debug!("Already received a mvba from {}: {:?}", authority, mvba);
+                        return;
+                    }
+                    self.mvbas.insert(authority, mvba);
+                }
+            }
+        }
     }
 
     pub fn raba_propose(&self) {
