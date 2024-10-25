@@ -9,7 +9,10 @@ use crate::{
 };
 use eyre::{bail, Ok};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashSet},
+};
 
 pub type MVBARoundNumber = u64;
 pub type ABARoundNumber = u64;
@@ -328,6 +331,8 @@ impl FINMVBAView {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PisaABABval {
     pub view: FINMVBAView, // the aba round number
     pub est: BinaryValue,
@@ -370,6 +375,7 @@ impl PisaABABval {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PisaABAAux {
     pub view: FINMVBAView, // the aba round number
     pub aux1: BinaryValue,
@@ -418,8 +424,8 @@ pub struct ACSFin {
     pub mvbas: BTreeMap<AuthorityIndex, CertifiedMVBA>, // MVBA proposals received from all nodes
     /* the following data is for MVBA */
     pub mvba_view: FINMVBAView, // the current MVBA view
-    pub raba_bvals: BTreeMap<FINMVBAView, BTreeMap<AuthorityIndex, PisaABABval>>, // record the binary value proposed by each node in each MVBA round/ABA round
-    pub raba_aux: BTreeMap<FINMVBAView, BTreeMap<AuthorityIndex, PisaABAAux>>, // record the auxiliary information proposed by each node in each MVBA round/ABA round
+    pub raba_bvals: BTreeMap<FINMVBAView, Vec<PisaABABval>>, // record the binary value proposed by each node in each MVBA round/ABA round
+    pub raba_aux: BTreeMap<FINMVBAView, Vec<PisaABAAux>>, // record the auxiliary information proposed by each node in each MVBA round/ABA round
 }
 
 impl ACSFin {
@@ -490,6 +496,71 @@ impl ACSFin {
         }
     }
 
+    pub fn update_rbab_round(
+        &mut self,
+        new_est: BinaryValue,
+        new_maj: BinaryValue,
+        signer: Signer,
+    ) -> PisaABABval {
+        self.mvba_view.aba_round += 1;
+        let new_pisa_aba_bval = PisaABABval::new(
+            self.mvba_view.clone(),
+            new_est,
+            new_maj,
+            self.authority,
+            signer,
+        );
+        self.raba_bvals
+            .entry(self.mvba_view.clone())
+            .or_insert(Vec::new())
+            .push(new_pisa_aba_bval.clone());
+        return new_pisa_aba_bval;
+    }
+
+    pub fn get_binary_values_in_view(
+        &self,
+        view: FINMVBAView,
+        acs_quorum: Stake,
+    ) -> HashSet<BinaryValue> {
+        let mut bvals = HashSet::new();
+        // we can only do this when we have n-f PisaABAAux in the view
+        if self.raba_aux.get(&view).unwrap().len() < acs_quorum as usize {
+            tracing::warn!("Fail to get binary values: Not enough PisaABAAux in the view");
+            return bvals;
+        }
+        for bval in self.raba_bvals.get(&view).unwrap() {
+            bvals.insert(bval.est);
+        }
+        return bvals;
+    }
+
+    pub fn get_majs_in_view(&self, view: FINMVBAView, acs_quorum: Stake) -> HashSet<BinaryValue> {
+        let mut majs = HashSet::new();
+        // we can only do this when we have n-f PisaABABval with est=0 (or est=1) in the view
+        let bval_with_zero = self
+            .raba_bvals
+            .get(&view.clone())
+            .unwrap()
+            .iter()
+            .filter(|&bval| bval.est == 0)
+            .count();
+        let bval_with_one = self
+            .raba_bvals
+            .get(&view.clone())
+            .unwrap()
+            .iter()
+            .filter(|&bval| bval.est == 1)
+            .count();
+        if bval_with_zero < (acs_quorum as usize) && bval_with_one < (acs_quorum as usize) {
+            tracing::warn!("Fail to get majority values: Not enough PisaABABval in the view");
+            return majs;
+        }
+        for bval in self.raba_bvals.get(&view).unwrap() {
+            majs.insert(bval.maj);
+        }
+        return majs;
+    }
+
     pub fn raba_propose(&self) {
         // todo
     }
@@ -513,5 +584,63 @@ impl ACSFin {
     pub fn coin(&self) -> BinaryValue {
         // todo
         self.mvba_view.aba_round as BinaryValue % 2
+    }
+
+    /// clean up raba_bvals and raba_aux before the view
+    pub fn cleanup(&mut self, view: FINMVBAView) {
+        let keys_to_remove: Vec<_> = self
+            .raba_bvals
+            .keys()
+            .filter(|&key| key.clone() < view)
+            .cloned()
+            .collect();
+        for key in keys_to_remove {
+            self.raba_bvals.remove(&key);
+            self.raba_aux.remove(&key);
+        }
+    }
+
+    /* These are auxiliary functions */
+    /// the V1 function in the Pisa protocol
+    pub fn get_only_value(&self, vals: Vec<BinaryValue>) -> BinaryValue {
+        let size = vals.len();
+        let zero_val = vals.iter().filter(|&v| *v == 0).count();
+        if zero_val == size {
+            return 0;
+        }
+        let one_val = vals.iter().filter(|&v| *v == 1).count();
+        if one_val == size {
+            return 1;
+        }
+        let two_val = vals.iter().filter(|&v| *v == 2).count();
+        if two_val == size {
+            return 2;
+        }
+        // return others
+        return 3;
+    }
+
+    /// the V2 function in the Pisa protocol
+    pub fn get_number_of_a_value(&self, vals: Vec<BinaryValue>, val: BinaryValue) -> u64 {
+        let zero_val = vals.iter().filter(|&v| *v == 0).count();
+        let one_val = vals.iter().filter(|&v| *v == 1).count();
+        if zero_val != 0 && one_val != 0 {
+            return 0;
+        }
+        vals.iter().filter(|&v| *v == val).count() as u64
+    }
+
+    pub fn get_majority(&self, vals: Vec<BinaryValue>) -> BinaryValue {
+        let size = vals.len();
+        let zero_val = vals.iter().filter(|&v| *v == 0).count();
+        if zero_val >= (size + 1) / 2 {
+            return 0;
+        }
+        let one_val = vals.iter().filter(|&v| *v == 1).count();
+        if one_val >= (size + 1) / 2 {
+            return 1;
+        }
+        // return None otherwise
+        return 2;
     }
 }
