@@ -6,7 +6,9 @@ use std::{collections::HashSet, sync::Arc, thread};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, MVBAVote, PoSTBlockVote},
+    acs_types::{
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote,
+    },
     block_handler::BlockHandler,
     data::Data,
     metrics::{Metrics, UtilizationTimerExt},
@@ -39,6 +41,8 @@ enum CoreThreadCommand {
     AddPoSTBlockVotes(Vec<PoSTBlockVote>, oneshot::Sender<()>),
     AddMVBAVote(Vec<MVBAVote>, oneshot::Sender<()>),
     AddCertifiedMVBA(Vec<CertifiedMVBA>, oneshot::Sender<()>),
+    AddPisaABABvalues(Vec<PisaABABval>, oneshot::Sender<()>),
+    AddPisaABAAuxiliaries(Vec<PisaABAAux>, oneshot::Sender<()>),
 }
 
 impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 'static>
@@ -96,6 +100,23 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddCertifiedMVBA(mvbas, sender))
             .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_pisa_aba_bvalues(&self, bvals: Vec<PisaABABval>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddPisaABABvalues(bvals, sender))
+            .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_pisa_aba_auxiliaries(&self, auxiliaries: Vec<PisaABAAux>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddPisaABAAuxiliaries(
+            auxiliaries,
+            sender,
+        ))
+        .await;
         receiver.await.expect("core thread is not expected to stop");
     }
 
@@ -185,6 +206,14 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                 }
                 CoreThreadCommand::AddCertifiedMVBA(certified_mvbas, sender) => {
                     self.syncer.add_certified_mvbas(certified_mvbas);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddPisaABABvalues(bvals, sender) => {
+                    self.syncer.add_pisa_aba_bvalues(bvals);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddPisaABAAuxiliaries(auxiliaries, sender) => {
+                    self.syncer.add_pisa_aba_auxiliaries(auxiliaries);
                     sender.send(()).ok();
                 }
             }

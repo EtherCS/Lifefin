@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
-    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, MVBAVote, PoSTBlockVote},
+    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote},
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
@@ -111,6 +111,22 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             .utilization_timer
             .utilization_timer("Syncer::add_certified_mvbas");
         self.core.add_certified_mvbas(mvbas);
+    }
+
+    pub fn add_pisa_aba_bvalues(&mut self, bvals: Vec<PisaABABval>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_pisa_aba_bvalues");
+        self.core.add_pisa_aba_bvalues(bvals);
+    }
+
+    pub fn add_pisa_aba_auxiliaries(&mut self, auxiliaries: Vec<PisaABAAux>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_pisa_aba_auxiliaries");
+        self.core.add_pisa_aba_auxiliaries(auxiliaries);
     }
 
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {

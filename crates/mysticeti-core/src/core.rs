@@ -14,7 +14,10 @@ use minibytes::Bytes;
 
 use crate::{
     acs_manager::ACSManager,
-    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PoSTBlockVote},
+    acs_types::{
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
+        PoSTBlockVote,
+    },
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
@@ -393,9 +396,30 @@ impl<H: BlockHandler> Core<H> {
                 .expect("ACS manager fails to write mvbas")
                 .add_certified_mvba(mvba);
         }
-        if self.acs_manager.read().expect("ACS manager fails to read").ready_for_fin(self.acs_quorum) {
+        if self
+            .acs_manager
+            .read()
+            .expect("ACS manager fails to read")
+            .ready_for_fin(self.acs_quorum)
+        {
             // todo: now we enter the MVBA process of FIN protocol
         }
+    }
+
+    pub fn add_pisa_aba_bvalues(&mut self, bvals: Vec<PisaABABval>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_pisa_aba_bvalues");
+        // todo
+    }
+
+    pub fn add_pisa_aba_auxiliaries(&mut self, bvals: Vec<PisaABAAux>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_pisa_aba_auxiliaries");
+        // todo
     }
 
     /// We switch to fallback mode if one of the following conditions is met:

@@ -244,6 +244,28 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                     tracing::debug!("Received certified mvba {:?} from {}", certified_mvba, peer);
                     inner.syncer.add_certified_mvbas(vec![certified_mvba]).await;
                 }
+                NetworkMessage::PisaABABvalue(pisa_abab_value) => {
+                    tracing::debug!(
+                        "Received pisa abab value {:?} from {}",
+                        pisa_abab_value,
+                        peer
+                    );
+                    inner
+                        .syncer
+                        .add_pisa_aba_bvalues(vec![pisa_abab_value])
+                        .await;
+                }
+                NetworkMessage::PisaABAAuxiliary(pisa_abab_auxiliary) => {
+                    tracing::debug!(
+                        "Received pisa abab auxiliary {:?} from {}",
+                        pisa_abab_auxiliary,
+                        peer
+                    );
+                    inner
+                        .syncer
+                        .add_pisa_aba_auxiliaries(vec![pisa_abab_auxiliary])
+                        .await;
+                }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
                     if let Err(e) = block.verify(&inner.committee) {
