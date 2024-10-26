@@ -31,6 +31,8 @@ pub struct Committee {
     authorities: Vec<Authority>,
     validity_threshold: Stake, // The minimum stake required for validity
     quorum_threshold: Stake,   // The minimum stake required for quorum
+    acs_validity_threshold: Stake,  // The minimum stake required for validity in ACS
+    acs_quorum_threshold: Stake,    // The minimum stake required for quorum in ACS
 }
 
 impl Committee {
@@ -58,10 +60,14 @@ impl Committee {
         }
         let validity_threshold = total_stake / 3;
         let quorum_threshold = 2 * total_stake / 3;
+        let acs_validity_threshold = total_stake / 3;
+        let acs_quorum_threshold = 2 * total_stake / 3;
         Arc::new(Committee {
             authorities,
             validity_threshold,
             quorum_threshold,
+            acs_validity_threshold,
+            acs_quorum_threshold,
         })
     }
 
@@ -77,6 +83,16 @@ impl Committee {
 
     pub fn quorum_threshold(&self) -> Stake {
         self.quorum_threshold + 1
+    }
+
+    /// f+1
+    pub fn acs_validity_threshold(&self) -> Stake {
+        self.acs_validity_threshold + 1
+    }
+
+    /// 2f+1
+    pub fn acs_quorum_threshold(&self) -> Stake {
+        self.acs_quorum_threshold + 1
     }
 
     pub fn get_public_key(&self, authority: AuthorityIndex) -> Option<&PublicKey> {
