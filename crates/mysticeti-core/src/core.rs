@@ -16,7 +16,7 @@ use crate::{
     acs_manager::ACSManager,
     acs_types::{
         CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
-        PoSTBlockVote,
+        PisaABAMessage, PoSTBlockVote,
     },
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -64,8 +64,8 @@ pub struct Core<H: BlockHandler> {
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
     // Here are our defined structures for ACS mode
-    acs_quorum: Stake,
     consensus_mode: ConsensusMode,
+    // todo: Arc is unnecessary for ACSManager
     acs_manager: Arc<RwLock<ACSManager>>,
     last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     acs_timeout: Duration,
@@ -153,8 +153,6 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
-        // acs_quorum = 2n/3 + 1
-        let acs_quorum = (*committee).clone().quorum_threshold();
         let public_key = committee.get_public_key(authority);
         let acs_manager = Arc::new(RwLock::new(ACSManager::new(
             authority,
@@ -190,7 +188,6 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
-            acs_quorum,
             consensus_mode: ConsensusMode::Optimistic,
             acs_manager,
             last_seen_blocks,
@@ -278,14 +275,14 @@ impl<H: BlockHandler> Core<H> {
             self.acs_manager
                 .write()
                 .expect("ACS manager fails to write post blocks")
-                .add_post_block(post_block, self.acs_quorum);
+                .add_post_block(post_block);
         }
         // if we receive 2f+1 post blocks, we are ready to propose MVBA
         if self
             .acs_manager
             .read()
             .expect("ACS manager fails to read")
-            .ready_for_mvba(self.acs_quorum)
+            .ready_for_mvba()
         {
             self.try_broadcast_mvba();
             // if we are not in fallback mode, switch to fallback mode
@@ -305,7 +302,7 @@ impl<H: BlockHandler> Core<H> {
             .acs_manager
             .write()
             .expect("ACS manager fails to write post block votes")
-            .add_votes(votes, self.acs_quorum);
+            .add_votes(votes);
         // if we just received enough votes for a new own post block, broadcast it
         for new_post_block in new_post_blocks {
             let rt = Runtime::new().unwrap();
@@ -339,7 +336,7 @@ impl<H: BlockHandler> Core<H> {
             .clone();
         let rt = Runtime::new().unwrap();
         // if we are certified, broadcast mvba
-        if mvba.is_certified(self.acs_quorum) {
+        if mvba.is_certified(self.committee.acs_quorum_threshold()) {
             rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(mvba)));
         } else {
             let mvba_proposal = MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal);
@@ -362,7 +359,7 @@ impl<H: BlockHandler> Core<H> {
             .acs_manager
             .write()
             .expect("ACS manager fails to write mvba votes")
-            .add_mvba_votes(mvba_votes, self.acs_quorum);
+            .add_mvba_votes(mvba_votes);
         // if we just received enough votes for a new mvba, broadcast it
         for new_mvba in new_mvbas {
             let rt = Runtime::new().unwrap();
@@ -400,7 +397,7 @@ impl<H: BlockHandler> Core<H> {
             .acs_manager
             .read()
             .expect("ACS manager fails to read")
-            .ready_for_fin(self.acs_quorum)
+            .ready_for_fin()
         {
             // todo: now we enter the MVBA process of FIN protocol
         }
@@ -411,7 +408,24 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_bvalues");
-        // todo
+        let pisa_messages = self
+            .acs_manager
+            .write()
+            .expect("ACS manager fails to write pisa bvals")
+            .add_pisa_aba_bvals(bvals, &self.signer);
+        for pisa_msg in pisa_messages {
+            let rt = Runtime::new().unwrap();
+            match pisa_msg {
+                PisaABAMessage::PisaABABval(new_bval) => {
+                    tracing::debug!("Create and braodcast own bval {:?}", new_bval);
+                    rt.block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_bval)));
+                }
+                PisaABAMessage::PisaABAAux(new_aux) => {
+                    tracing::debug!("Create and braodcast own aux {:?}", new_aux);
+                    rt.block_on(self.broadcast(NetworkMessage::PisaABAAuxiliary(new_aux)));
+                }
+            }
+        }
     }
 
     pub fn add_pisa_aba_auxiliaries(&mut self, bvals: Vec<PisaABAAux>) {
@@ -440,7 +454,9 @@ impl<H: BlockHandler> Core<H> {
             );
         // we use tokio::runtime::Runtime to support calling async function in sync function
         let rt = Runtime::new().unwrap();
-        if (my_certified_post_block.signatures.len() as Stake) > self.acs_quorum {
+        if (my_certified_post_block.signatures.len() as Stake)
+            > self.committee.acs_quorum_threshold()
+        {
             // broadcast the certified post block if we have enough signatures
             rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlock(
                 my_certified_post_block.clone(),

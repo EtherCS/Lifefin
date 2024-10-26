@@ -3,7 +3,7 @@
 
 use crate::{
     committee::Committee,
-    crypto::{MVBADigest, MetaPoSTBlockDigest, PublicKey, SignatureBytes, Signer},
+    crypto::{MVBADigest, MetaPoSTBlockDigest, PisaABADigest, PublicKey, SignatureBytes, Signer},
     data::Data,
     types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
 };
@@ -18,6 +18,12 @@ pub type MVBARoundNumber = u64;
 pub type ABARoundNumber = u64;
 pub type BinaryValue = u64; // b=0, b=1, b=2 (None)
 pub type MVBA = u128;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum PisaABAMessage {
+    PisaABABval(PisaABABval),
+    PisaABAAux(PisaABAAux),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MetaPoSTBlockData {
@@ -347,7 +353,7 @@ impl PisaABABval {
         est: BinaryValue,
         maj: BinaryValue,
         authority: AuthorityIndex,
-        signer: Signer,
+        signer: &Signer,
     ) -> Self {
         let signature = signer.sign_pisa_aba_bval(view.clone(), est, maj, authority);
         Self {
@@ -361,6 +367,10 @@ impl PisaABABval {
 
     pub fn author(&self) -> AuthorityIndex {
         self.authority
+    }
+
+    pub fn digest(&self) -> PisaABADigest {
+        PisaABADigest::new(self.view.clone(), self.est, self.maj, self.authority)
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -390,7 +400,7 @@ impl PisaABAAux {
         aux1: BinaryValue,
         aux2: BinaryValue,
         authority: AuthorityIndex,
-        signer: Signer,
+        signer: &Signer,
     ) -> Self {
         let signature = signer.sign_pisa_aba_aux(view.clone(), aux1, aux2, authority);
         Self {
@@ -404,6 +414,10 @@ impl PisaABAAux {
 
     pub fn author(&self) -> AuthorityIndex {
         self.authority
+    }
+
+    pub fn digest(&self) -> PisaABADigest {
+        PisaABADigest::new(self.view.clone(), self.aux1, self.aux2, self.authority)
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -424,6 +438,8 @@ pub struct ACSFin {
     pub mvbas: BTreeMap<AuthorityIndex, CertifiedMVBA>, // MVBA proposals received from all nodes
     /* the following data is for MVBA */
     pub mvba_view: FINMVBAView, // the current MVBA view
+    pub current_bval: BinaryValue,
+    pub current_maj: BinaryValue,
     pub raba_bvals: BTreeMap<FINMVBAView, Vec<PisaABABval>>, // record the binary value proposed by each node in each MVBA round/ABA round
     pub raba_aux: BTreeMap<FINMVBAView, Vec<PisaABAAux>>, // record the auxiliary information proposed by each node in each MVBA round/ABA round
 }
@@ -442,6 +458,8 @@ impl ACSFin {
             committee,
             last_acs_round,
             mvbas,
+            current_bval: 0,
+            current_maj: 2,
             mvba_view: FINMVBAView::new(),
             raba_bvals: BTreeMap::new(),
             raba_aux: BTreeMap::new(),
@@ -496,11 +514,169 @@ impl ACSFin {
         }
     }
 
+    pub fn add_pisa_aba_bvals(
+        &mut self,
+        bvals: Vec<PisaABABval>,
+        signer: &Signer,
+    ) -> Vec<PisaABAMessage> {
+        let mut return_messages = Vec::new();
+        if self.mvba_view.aba_round == 0 {
+            // todo
+        }
+        for bval in bvals {
+            if let Err(e) = bval.verify(&self.committee) {
+                tracing::warn!("Invalid pisa aba bval from {}: {:?}", bval.author(), e);
+                continue;
+            }
+            match bval.view.cmp(&self.mvba_view) {
+                Ordering::Less => {
+                    tracing::warn!("Received a pisa aba bval with older view: {:?}", bval.view);
+                    continue;
+                }
+                Ordering::Greater => {
+                    // we will buffer the future pisa aba bval
+                    if self
+                        .raba_bvals
+                        .get(&bval.view)
+                        .unwrap()
+                        .iter()
+                        .any(|b| b.digest() == bval.digest())
+                    {
+                        tracing::debug!(
+                            "Already received this pisa aba bval from {}: {:?}",
+                            bval.author(),
+                            bval
+                        );
+                        continue;
+                    }
+                    self.raba_bvals
+                        .entry(bval.view.clone())
+                        .or_insert(Vec::new())
+                        .push(bval.clone());
+                }
+                Ordering::Equal => {
+                    if self
+                        .raba_bvals
+                        .get(&bval.view)
+                        .unwrap()
+                        .iter()
+                        .any(|b| b.digest() == bval.digest())
+                    {
+                        tracing::debug!(
+                            "Already received a pisa aba bval from {}: {:?}",
+                            bval.author(),
+                            bval
+                        );
+                        continue;
+                    }
+                    self.raba_bvals
+                        .entry(bval.view.clone())
+                        .or_insert(Vec::new())
+                        .push(bval.clone());
+                    let est = bval.est;
+                    let est_count = self
+                        .raba_bvals
+                        .get(&bval.view)
+                        .unwrap()
+                        .iter()
+                        .filter(|&b| b.est == est)
+                        .count();
+                    // receive n-f PisaABABval with the same est value, enter the agreement phase
+                    if est_count >= self.committee.acs_quorum_threshold() as usize {
+                        if let Some(return_aux) = self.create_aux(bval.clone(), signer) {
+                            return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
+                        }
+                    }
+                    // receive f+1 PisaABABval with the same est value
+                    else if est_count >= self.committee.acs_validity_threshold() as usize {
+                        // if we haven't send this bval, then do it
+                        if let Some(return_bval) = self.create_bval(bval.clone(), signer) {
+                            return_messages.push(PisaABAMessage::PisaABABval(return_bval));
+                        }
+                    }
+                }
+            }
+        }
+        return_messages
+    }
+
+    fn create_aux(&mut self, bval: PisaABABval, signer: &Signer) -> Option<PisaABAAux> {
+        let last_coin = self.coin(bval.view.aba_round - 1);
+        let est = bval.est;
+        let est_cap = (est + 1) % 2;
+        let majs = self.get_majs_in_view(bval.view.clone());
+        let mut delta_b = 0;
+        if (est == last_coin && self.get_only_value(&majs) == est)
+            || (est == last_coin && !majs.contains(&est_cap))
+        {
+            delta_b = 1;
+        }
+        // if we haven't broadcast aux message, then do it
+        if !self
+            .raba_aux
+            .get(&bval.view)
+            .unwrap()
+            .iter()
+            .any(|aux| aux.authority == self.authority && aux.aux1 == est)
+            || !self
+                .raba_aux
+                .get(&bval.view)
+                .unwrap()
+                .iter()
+                .any(|aux| aux.authority == self.authority && aux.aux1 == est_cap)
+        {
+            if delta_b == 1 {
+                let return_aux =
+                    PisaABAAux::new(bval.view.clone(), est, est, self.authority, signer);
+                // add own aux to the view
+                self.raba_aux
+                    .entry(bval.view.clone())
+                    .or_insert(Vec::new())
+                    .push(return_aux.clone());
+                return Some(return_aux);
+            } else {
+                let return_aux = PisaABAAux::new(bval.view.clone(), 2, est, self.authority, signer);
+                // add own aux to the view
+                self.raba_aux
+                    .entry(bval.view.clone())
+                    .or_insert(Vec::new())
+                    .push(return_aux.clone());
+                return Some(return_aux);
+            }
+        }
+        None
+    }
+
+    fn create_bval(&mut self, bval: PisaABABval, signer: &Signer) -> Option<PisaABABval> {
+        let est = bval.est;
+        if !self
+            .raba_bvals
+            .get(&bval.view)
+            .unwrap()
+            .iter()
+            .any(|b| b.authority == self.authority && b.est == est)
+        {
+            let new_bval = PisaABABval::new(
+                bval.view.clone(),
+                est,
+                self.current_maj,
+                self.authority,
+                signer,
+            );
+            self.raba_bvals
+                .entry(bval.view.clone())
+                .or_insert(Vec::new())
+                .push(new_bval.clone());
+            return Some(new_bval);
+        }
+        None
+    }
+
     pub fn update_rbab_round(
         &mut self,
         new_est: BinaryValue,
         new_maj: BinaryValue,
-        signer: Signer,
+        signer: &Signer,
     ) -> PisaABABval {
         self.mvba_view.aba_round += 1;
         let new_pisa_aba_bval = PisaABABval::new(
@@ -517,24 +693,29 @@ impl ACSFin {
         return new_pisa_aba_bval;
     }
 
-    pub fn get_binary_values_in_view(
-        &self,
-        view: FINMVBAView,
-        acs_quorum: Stake,
-    ) -> HashSet<BinaryValue> {
+    /// bin_values
+    pub fn get_binary_values_in_view(&self, view: FINMVBAView) -> Vec<BinaryValue> {
+        if self.mvba_view.aba_round == 0 {
+            // todo
+        }
         let mut bvals = HashSet::new();
         // we can only do this when we have n-f PisaABAAux in the view
-        if self.raba_aux.get(&view).unwrap().len() < acs_quorum as usize {
+        if self.raba_aux.get(&view).unwrap().len() < self.committee.acs_quorum_threshold() as usize
+        {
             tracing::warn!("Fail to get binary values: Not enough PisaABAAux in the view");
-            return bvals;
+            return bvals.into_iter().collect();
         }
         for bval in self.raba_bvals.get(&view).unwrap() {
             bvals.insert(bval.est);
         }
-        return bvals;
+        return bvals.into_iter().collect();
     }
 
-    pub fn get_majs_in_view(&self, view: FINMVBAView, acs_quorum: Stake) -> HashSet<BinaryValue> {
+    /// majs
+    pub fn get_majs_in_view(&self, view: FINMVBAView) -> Vec<BinaryValue> {
+        if self.mvba_view.aba_round == 0 {
+            // todo
+        }
         let mut majs = HashSet::new();
         // we can only do this when we have n-f PisaABABval with est=0 (or est=1) in the view
         let bval_with_zero = self
@@ -551,14 +732,16 @@ impl ACSFin {
             .iter()
             .filter(|&bval| bval.est == 1)
             .count();
-        if bval_with_zero < (acs_quorum as usize) && bval_with_one < (acs_quorum as usize) {
+        if bval_with_zero < (self.committee.acs_quorum_threshold() as usize)
+            && bval_with_one < (self.committee.acs_quorum_threshold() as usize)
+        {
             tracing::warn!("Fail to get majority values: Not enough PisaABABval in the view");
-            return majs;
+            return majs.into_iter().collect();
         }
         for bval in self.raba_bvals.get(&view).unwrap() {
             majs.insert(bval.maj);
         }
-        return majs;
+        return majs.into_iter().collect();
     }
 
     pub fn raba_propose(&self) {
@@ -575,15 +758,15 @@ impl ACSFin {
 
     /// todo: random
     /// Current election: round robin
-    pub fn election(&self) -> AuthorityIndex {
-        self.mvba_view.mvba_round as AuthorityIndex % self.committee.len() as AuthorityIndex
+    pub fn election(&self, mvba_round: MVBARoundNumber) -> AuthorityIndex {
+        mvba_round as AuthorityIndex % self.committee.len() as AuthorityIndex
     }
 
     /// todo: random
     /// Current election: coin flip
-    pub fn coin(&self) -> BinaryValue {
+    pub fn coin(&self, aba_round: ABARoundNumber) -> BinaryValue {
         // todo
-        self.mvba_view.aba_round as BinaryValue % 2
+        aba_round as BinaryValue % 2
     }
 
     /// clean up raba_bvals and raba_aux before the view
@@ -602,7 +785,7 @@ impl ACSFin {
 
     /* These are auxiliary functions */
     /// the V1 function in the Pisa protocol
-    pub fn get_only_value(&self, vals: Vec<BinaryValue>) -> BinaryValue {
+    pub fn get_only_value(&self, vals: &Vec<BinaryValue>) -> BinaryValue {
         let size = vals.len();
         let zero_val = vals.iter().filter(|&v| *v == 0).count();
         if zero_val == size {
@@ -621,7 +804,7 @@ impl ACSFin {
     }
 
     /// the V2 function in the Pisa protocol
-    pub fn get_number_of_a_value(&self, vals: Vec<BinaryValue>, val: BinaryValue) -> u64 {
+    pub fn get_number_of_a_value(&self, vals: &Vec<BinaryValue>, val: BinaryValue) -> u64 {
         let zero_val = vals.iter().filter(|&v| *v == 0).count();
         let one_val = vals.iter().filter(|&v| *v == 1).count();
         if zero_val != 0 && one_val != 0 {
@@ -630,7 +813,7 @@ impl ACSFin {
         vals.iter().filter(|&v| *v == val).count() as u64
     }
 
-    pub fn get_majority(&self, vals: Vec<BinaryValue>) -> BinaryValue {
+    pub fn get_majority(&self, vals: &Vec<BinaryValue>) -> BinaryValue {
         let size = vals.len();
         let zero_val = vals.iter().filter(|&v| *v == 0).count();
         if zero_val >= (size + 1) / 2 {

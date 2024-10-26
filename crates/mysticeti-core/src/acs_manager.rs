@@ -1,11 +1,12 @@
 use crate::{
     acs_types::{
-        ACSFin, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, MetaPoSTBlockData, PisaABABval, PisaABAMessage, PoSTBlockVote
+        ACSFin, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, MetaPoSTBlockData,
+        PisaABABval, PisaABAMessage, PoSTBlockVote,
     },
     committee::Committee,
     crypto::{PublicKey, Signer},
     data::Data,
-    types::{AuthorityIndex, BlockReference, RoundNumber, Stake, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
 
 use std::collections::HashMap;
@@ -211,10 +212,7 @@ impl ACSManager {
     /// 1) vote for our post block
     /// 2) votes servicing as a meta post block from other peers
     /// It returns: 1) own post block with 2f+1 signatures, 2) a post block used to create a post block vote for other peers
-    pub fn add_votes(
-        &mut self,
-        votes: Vec<PoSTBlockVote>
-    ) -> Vec<CertifiedPoSTBlockData> {
+    pub fn add_votes(&mut self, votes: Vec<PoSTBlockVote>) -> Vec<CertifiedPoSTBlockData> {
         let mut return_post_blocks = Vec::new();
         for vote in votes {
             // verify the signature
@@ -234,12 +232,16 @@ impl ACSManager {
                     // check if the vote is for our own PoST block
                     if post_block.get_meta_post_block().digest() == vote.meta_post_block.digest() {
                         // if we already have enough signatures, ignore the vote to avoid different PoST blocks
-                        if post_block.signatures.len() >= self.committee.acs_quorum_threshold() as usize {
+                        if post_block.signatures.len()
+                            >= self.committee.acs_quorum_threshold() as usize
+                        {
                             continue;
                         }
                         // add the signature to the PoST block
                         post_block.update_signature(vote_public_key.clone(), vote.signature);
-                        if post_block.signatures.len() >= self.committee.acs_quorum_threshold() as usize {
+                        if post_block.signatures.len()
+                            >= self.committee.acs_quorum_threshold() as usize
+                        {
                             return_post_blocks.push(post_block.clone());
                             // own PoST block is certified
                             if (self
@@ -288,10 +290,7 @@ impl ACSManager {
     /// 1) uncertified mvba for our block
     /// 2) uncertified mvba from other peers
     /// It returns: 1) own mvba with 2f+1 signatures, 2) a certified mvba used to create a mvba vote for other peers
-    pub fn add_mvba_votes(
-        &mut self,
-        uncertified_mvbas: Vec<MVBAVote>
-    ) -> Vec<CertifiedMVBA> {
+    pub fn add_mvba_votes(&mut self, uncertified_mvbas: Vec<MVBAVote>) -> Vec<CertifiedMVBA> {
         let mut return_mvbas = Vec::new();
         for mvba in uncertified_mvbas {
             if let Err(e) = mvba.verify(&self.committee) {
@@ -310,12 +309,16 @@ impl ACSManager {
                     // check if the mvba vote is for our own mvba proposal
                     if certified_mvba.get_mvba_proposal().digest() == mvba.mvba_proposal.digest() {
                         // if we already have enough signatures, ignore the vote to avoid different mvba
-                        if certified_mvba.signatures.len() >= self.committee.acs_quorum_threshold() as usize {
+                        if certified_mvba.signatures.len()
+                            >= self.committee.acs_quorum_threshold() as usize
+                        {
                             continue;
                         }
                         // add the signature to the mvba proposal
                         certified_mvba.update_signature(voter_public_key.clone(), mvba.signature);
-                        if certified_mvba.signatures.len() >= self.committee.acs_quorum_threshold() as usize {
+                        if certified_mvba.signatures.len()
+                            >= self.committee.acs_quorum_threshold() as usize
+                        {
                             return_mvbas.push(certified_mvba.clone());
                         }
                     } else {
@@ -343,10 +346,13 @@ impl ACSManager {
         self.acs_fin.add_certified_mvba(mvba);
     }
 
-    pub fn add_pisa_aba_bvals(&mut self, bvals: Vec<PisaABABval>) -> Vec<PisaABAMessage> {
-        self.acs_fin.add_pisa_aba_bvals(bvals)
+    pub fn add_pisa_aba_bvals(
+        &mut self,
+        bvals: Vec<PisaABABval>,
+        signer: &Signer,
+    ) -> Vec<PisaABAMessage> {
+        self.acs_fin.add_pisa_aba_bvals(bvals, signer)
     }
-
 
     pub fn ready_for_mvba(&self) -> bool {
         self.acs_fin
@@ -359,7 +365,8 @@ impl ACSManager {
     }
 
     pub fn ready_for_fin(&self) -> bool {
-        self.acs_fin.ready_for_fin(self.committee.acs_quorum_threshold())
+        self.acs_fin
+            .ready_for_fin(self.committee.acs_quorum_threshold())
     }
 
     pub fn authority(&self) -> AuthorityIndex {
