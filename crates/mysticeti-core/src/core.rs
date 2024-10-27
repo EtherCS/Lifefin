@@ -15,8 +15,7 @@ use minibytes::Bytes;
 use crate::{
     acs_manager::ACSManager,
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
-        PisaABAMessage, PoSTBlockVote,
+        CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
     },
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -400,6 +399,20 @@ impl<H: BlockHandler> Core<H> {
             .ready_for_fin()
         {
             // todo: now we enter the MVBA process of FIN protocol
+            let new_view = FINMVBAView::new();
+            let elected_mvba = self
+                .acs_manager
+                .read()
+                .expect("ACS manager fails to read")
+                .acs_fin
+                .election(new_view.mvba_round);
+            if let Some(_est0) = self.acs_manager.read().expect("ACS manager fails to read").acs_fin.mvbas.get(&elected_mvba) {
+                // we have received this mvba
+                self.acs_manager.write().expect("ACS manager fails to write").enter_fin_mvba(FINMVBAView::new(), 1, 2);
+            } else {
+                // we have not received this mvba
+                self.acs_manager.write().expect("ACS manager fails to write").enter_fin_mvba(FINMVBAView::new(), 0, 2);
+            }
         }
     }
 
@@ -433,7 +446,7 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_auxiliaries");
-        // todo
+        self.acs_manager.write().expect("ACS manager fails to write pisa aux").add_pisa_aba_auxs(bvals);
     }
 
     /// We switch to fallback mode if one of the following conditions is met:

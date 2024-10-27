@@ -1,7 +1,6 @@
 use crate::{
     acs_types::{
-        ACSFin, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, MetaPoSTBlockData,
-        PisaABABval, PisaABAMessage, PoSTBlockVote,
+        ACSFin, BinaryValue, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
     },
     committee::Committee,
     crypto::{PublicKey, Signer},
@@ -354,6 +353,10 @@ impl ACSManager {
         self.acs_fin.add_pisa_aba_bvals(bvals, signer)
     }
 
+    pub fn add_pisa_aba_auxs(&mut self, auxs: Vec<PisaABAAux>) {
+        self.acs_fin.add_pisa_aba_auxs(auxs);
+    }
+
     pub fn ready_for_mvba(&self) -> bool {
         self.acs_fin
             .mvbas
@@ -367,6 +370,10 @@ impl ACSManager {
     pub fn ready_for_fin(&self) -> bool {
         self.acs_fin
             .ready_for_fin(self.committee.acs_quorum_threshold())
+    }
+
+    pub fn enter_fin_mvba(&mut self, new_view: FINMVBAView, new_bval: BinaryValue, new_maj: BinaryValue) {
+        self.acs_fin.new_fin_view(new_view, new_bval, new_maj);
     }
 
     pub fn authority(&self) -> AuthorityIndex {

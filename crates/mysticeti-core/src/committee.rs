@@ -95,6 +95,11 @@ impl Committee {
         self.acs_quorum_threshold + 1
     }
 
+    /// (n+f+1)/2
+    pub fn acs_raba_decide_threshold(&self) -> Stake {
+        (self.len() as Stake + self.acs_validity_threshold() + 1) / 2
+    }
+
     pub fn get_public_key(&self, authority: AuthorityIndex) -> Option<&PublicKey> {
         self.authorities
             .get(authority as usize)
