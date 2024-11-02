@@ -136,6 +136,9 @@ impl<H: BlockHandler> Core<H> {
                 .with_pipeline(public_config.parameters.enable_pipelining)
                 .build();
         let attack_type = public_config.parameters.attack_type;
+        threshold_clock.set_attack_type(attack_type);
+        threshold_clock.set_adversary_authority(authority);
+
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -381,6 +384,7 @@ impl<H: BlockHandler> Core<H> {
             self.wal_writer.sync().expect("Wal sync failed");
         }
 
+        // self.threshold_clock.propose_at_round(block.round());
         tracing::debug!("Created block {block:?}");
         Some(block)
     }

@@ -5,8 +5,10 @@ use std::cmp::Ordering;
 
 use crate::{
     committee::{Committee, QuorumThreshold, StakeAggregator},
-    types::{BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
+
+use acs::adversary::AttackType;
 
 // A block is threshold clock valid if:
 // - all included blocks have a round number lower than the block round number.
@@ -39,13 +41,19 @@ pub fn threshold_clock_valid_non_genesis(block: &StatementBlock, committee: &Com
 pub struct ThresholdClockAggregator {
     aggregator: StakeAggregator<QuorumThreshold>,
     round: RoundNumber,
+    proposed_round: RoundNumber,
+    adversary_authority: AuthorityIndex,  
+    attack_type: AttackType,
 }
 
 impl ThresholdClockAggregator {
     pub fn new(round: RoundNumber) -> Self {
         Self {
             aggregator: StakeAggregator::new(),
-            round,
+            round: round,
+            proposed_round: 0,
+            adversary_authority: 0,
+            attack_type: AttackType::Honest,
         }
     }
 
@@ -60,10 +68,26 @@ impl ThresholdClockAggregator {
                 self.round = block.round;
             }
             Ordering::Equal => {
+                if block.authority == self.adversary_authority {
+                    // The adversary is proposing a block. Then we can advance the round if we have seen 2f+1 blocks
+                    self.proposed_round = block.round;
+                }
+                
                 if self.aggregator.add(block.authority, committee) {
-                    self.aggregator.clear();
-                    // We have seen 2f+1 blocks for current round, advance
-                    self.round = block.round + 1;
+                    match self.attack_type {
+                        AttackType::Inflation => {
+                            // If the attacker does not propose in this round, we should not advance
+                            if block.round == self.proposed_round {
+                                self.aggregator.clear();
+                                self.round = block.round + 1;
+                            }
+                        }
+                        _ => {
+                            self.aggregator.clear();
+                            // We have seen 2f+1 blocks for current round, advance
+                            self.round = block.round + 1;
+                        }
+                    }
                 }
             }
         }
@@ -71,6 +95,18 @@ impl ThresholdClockAggregator {
             // If we processed block for round r, we also have stored 2f+1 blocks from r-1
             self.round = block.round;
         }
+    }
+
+    pub fn propose_at_round(&mut self, round: RoundNumber) {
+        self.proposed_round = round;
+    }
+
+    pub fn set_adversary_authority(&mut self, authority: AuthorityIndex) {
+        self.adversary_authority = authority;
+    }
+
+    pub fn set_attack_type(&mut self, attack_type: AttackType) {
+        self.attack_type = attack_type;
     }
 
     pub fn get_round(&self) -> RoundNumber {
