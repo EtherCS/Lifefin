@@ -1,6 +1,6 @@
 use crate::{
     acs_types::{
-        ACSFin, BinaryValue, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
+        ACSFin, BinaryValue, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBA, MVBAProposal, MVBAVote, MetaPoSTBlockData, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
     },
     committee::Committee,
     crypto::{PublicKey, Signer},
@@ -11,13 +11,15 @@ use crate::{
 use std::collections::HashMap;
 use std::{cmp::Ordering, collections::BTreeMap};
 
+
+#[derive(Clone)]
 pub struct ACSManager {
     authority: AuthorityIndex,
     public_key: PublicKey,
     committee: Committee, // for verification
     round: RoundNumber,   // the last round agreed by the ACS mode
     last_seen_meta_post_blocks: HashMap<AuthorityIndex, MetaPoSTBlockData>,
-    post_blocks: HashMap<AuthorityIndex, CertifiedPoSTBlockData>,
+    pub post_blocks: HashMap<AuthorityIndex, CertifiedPoSTBlockData>,
     pub acs_fin: ACSFin, // manage FIN messages
     last_seen_mvba_proposal: HashMap<AuthorityIndex, MVBAProposal>,
 }
@@ -353,8 +355,8 @@ impl ACSManager {
         self.acs_fin.add_pisa_aba_bvals(bvals, signer)
     }
 
-    pub fn add_pisa_aba_auxs(&mut self, auxs: Vec<PisaABAAux>) {
-        self.acs_fin.add_pisa_aba_auxs(auxs);
+    pub fn add_pisa_aba_auxs(&mut self, auxs: Vec<PisaABAAux>) -> Option<MVBA> {
+        return self.acs_fin.add_pisa_aba_auxs(auxs);
     }
 
     pub fn ready_for_mvba(&self) -> bool {
