@@ -15,7 +15,7 @@ use minibytes::Bytes;
 use crate::{
     acs_manager::ACSManager,
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
+        ACSOutput, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
     },
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -65,7 +65,8 @@ pub struct Core<H: BlockHandler> {
     // Here are our defined structures for ACS mode
     consensus_mode: ConsensusMode,
     // todo: Arc is unnecessary for ACSManager
-    acs_manager: Arc<RwLock<ACSManager>>,
+    // acs_manager: Arc<RwLock<ACSManager>>,
+    acs_manager: ACSManager,
     last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     acs_timeout: Duration,
     last_commit_time: Instant,
@@ -153,12 +154,12 @@ impl<H: BlockHandler> Core<H> {
                 .build();
         let attack_type = public_config.parameters.attack_type;
         let public_key = committee.get_public_key(authority);
-        let acs_manager = Arc::new(RwLock::new(ACSManager::new(
+        let acs_manager = ACSManager::new(
             authority,
             public_key.unwrap().clone(),
             (*committee).clone(),
             0,
-        )));
+        );
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -271,17 +272,10 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer
             .utilization_timer("Core::add_post_blocks");
         for post_block in blocks {
-            self.acs_manager
-                .write()
-                .expect("ACS manager fails to write post blocks")
-                .add_post_block(post_block);
+            self.acs_manager.add_post_block(post_block);
         }
         // if we receive 2f+1 post blocks, we are ready to propose MVBA
-        if self
-            .acs_manager
-            .read()
-            .expect("ACS manager fails to read")
-            .ready_for_mvba()
+        if self.acs_manager.ready_for_mvba()
         {
             self.try_broadcast_mvba();
             // if we are not in fallback mode, switch to fallback mode
@@ -297,11 +291,7 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_post_block_votes");
-        let new_post_blocks = self
-            .acs_manager
-            .write()
-            .expect("ACS manager fails to write post block votes")
-            .add_votes(votes);
+        let new_post_blocks = self.acs_manager.add_votes(votes);
         // if we just received enough votes for a new own post block, broadcast it
         for new_post_block in new_post_blocks {
             let rt = Runtime::new().unwrap();
@@ -328,8 +318,6 @@ impl<H: BlockHandler> Core<H> {
     fn try_broadcast_mvba(&mut self) {
         let mvba = self
             .acs_manager
-            .read()
-            .expect("ACS manager fails to read")
             .acs_fin
             .get_own_mvba()
             .clone();
@@ -356,8 +344,6 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer("Core::add_mvba_votes");
         let new_mvbas = self
             .acs_manager
-            .write()
-            .expect("ACS manager fails to write mvba votes")
             .add_mvba_votes(mvba_votes);
         // if we just received enough votes for a new mvba, broadcast it
         for new_mvba in new_mvbas {
@@ -388,30 +374,31 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer("Core::add_certified_mvbas");
         for mvba in mvbas {
             self.acs_manager
-                .write()
-                .expect("ACS manager fails to write mvbas")
                 .add_certified_mvba(mvba);
         }
         if self
             .acs_manager
-            .read()
-            .expect("ACS manager fails to read")
             .ready_for_fin()
         {
             // todo: now we enter the MVBA process of FIN protocol
             let new_view = FINMVBAView::new();
             let elected_mvba = self
                 .acs_manager
-                .read()
-                .expect("ACS manager fails to read")
                 .acs_fin
                 .election(new_view.mvba_round);
-            if let Some(_est0) = self.acs_manager.read().expect("ACS manager fails to read").acs_fin.mvbas.get(&elected_mvba) {
+            if let Some(_est0) = self
+                .acs_manager
+                .acs_fin
+                .mvbas
+                .get(&elected_mvba)
+            {
                 // we have received this mvba
-                self.acs_manager.write().expect("ACS manager fails to write").enter_fin_mvba(FINMVBAView::new(), 1, 2);
+                self.acs_manager
+                    .enter_fin_mvba(FINMVBAView::new(), 1, 2);
             } else {
                 // we have not received this mvba
-                self.acs_manager.write().expect("ACS manager fails to write").enter_fin_mvba(FINMVBAView::new(), 0, 2);
+                self.acs_manager
+                    .enter_fin_mvba(FINMVBAView::new(), 0, 2);
             }
         }
     }
@@ -423,8 +410,6 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer("Core::add_pisa_aba_bvalues");
         let pisa_messages = self
             .acs_manager
-            .write()
-            .expect("ACS manager fails to write pisa bvals")
             .add_pisa_aba_bvals(bvals, &self.signer);
         for pisa_msg in pisa_messages {
             let rt = Runtime::new().unwrap();
@@ -446,7 +431,59 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_auxiliaries");
-        self.acs_manager.write().expect("ACS manager fails to write pisa aux").add_pisa_aba_auxs(bvals);
+        if let Some(mvba) = self
+            .acs_manager
+            .add_pisa_aba_auxs(bvals)
+        {
+            // we are able to decide and complish the ACS process
+            if mvba == 0 {
+                // this means that we haven't received the mvba
+                let decided_mvba_from = self
+                    .acs_manager
+                    .acs_fin
+                    .current_election();
+                // todo: send request to other peers to get the decided mvba
+            } else {
+                // we need to collect all indexes such that the i-th index of mvba is 1
+                let mut mvba_index = Vec::new();
+                let mut bit_position = 0;
+                let mut mvba_temp = mvba;
+                while mvba_temp > 0 {
+                    if mvba_temp & 1 == 1 {
+                        mvba_index.push(bit_position);
+                    }
+                    mvba_temp >>= 1;
+                    bit_position += 1;
+                }
+                // We have this mvba, then we need to ensure we also have all associated post blocks
+                let mut post_blocks = Vec::new();
+                let mut missing_post_blocks_from = Vec::new();
+                let mut acs_round = 0;  // the round if the acs is completed, which is the highest round of the post blocks
+                for index in mvba_index {
+                    if let Some(post_block) = self
+                        .acs_manager
+                        .post_blocks
+                        .get(&index)
+                    {
+                        post_blocks.push(post_block);
+                        if post_block.stuck_block.reference().round > acs_round {
+                            acs_round = post_block.stuck_block.reference().round;
+                        }
+                    } else {
+                        missing_post_blocks_from.push(index);
+                    }
+                }
+                if missing_post_blocks_from.is_empty() {
+                    let state_blocks: Vec<Data<StatementBlock>> = post_blocks.iter().map(|post_block| post_block.stuck_block.clone()).collect();
+                    let acs_output = ACSOutput::new(acs_round, state_blocks);
+                    // Fortunately, we have all post blocks, then we can commit the mvba
+                    self.commit_acs(acs_output);
+                } else {
+                    // we need to request the missing post blocks from other peers
+                    // todo
+                }
+            }
+        }
     }
 
     /// We switch to fallback mode if one of the following conditions is met:
@@ -457,8 +494,6 @@ impl<H: BlockHandler> Core<H> {
         // create own certified post block
         let my_certified_post_block = self
             .acs_manager
-            .write()
-            .expect("ACS manager fails to create own block")
             .create_own_post_block(
                 self.last_own_block.block.clone().reference().round,
                 self.last_own_block.block.clone(),
@@ -488,11 +523,10 @@ impl<H: BlockHandler> Core<H> {
         self.consensus_mode = ConsensusMode::Fallback;
     }
 
-    pub fn commit_acs(&mut self) {
+    pub fn commit_acs(&mut self, acs_output: ACSOutput) {
+        // todo: commit all history blocks based on acs_output
         self.consensus_mode = ConsensusMode::Optimistic;
         self.acs_manager
-            .write()
-            .expect("ACS manager fails to reset")
             .reset();
     }
 
@@ -809,8 +843,8 @@ impl<H: BlockHandler> Core<H> {
         self.consensus_mode
     }
 
-    pub fn acs_manager(&self) -> Arc<RwLock<ACSManager>> {
-        Arc::clone(&self.acs_manager)
+    pub fn acs_manager(&self) -> &ACSManager {
+        &self.acs_manager
     }
 
     /* We implement network communication for core here: */
