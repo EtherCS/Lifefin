@@ -341,7 +341,11 @@ impl ACSOutput {
 
     pub fn new_leader(&self, committer: UniversalCommitter) -> Data<StatementBlock> {
         // collect the blocks with the highest round
-        let highest_blocks: Vec<&Data<StatementBlock>> = self.blocks.iter().filter(|&b| b.round() == self.round).collect();
+        let highest_blocks: Vec<&Data<StatementBlock>> = self
+            .blocks
+            .iter()
+            .filter(|&b| b.round() == self.round)
+            .collect();
         if highest_blocks.len() == 0 {
             tracing::warn!("No blocks with the highest round {}", self.round);
         }
@@ -474,7 +478,6 @@ impl PisaABAAux {
     }
 }
 
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ACSFin {
     pub authority: AuthorityIndex,
@@ -515,7 +518,27 @@ impl ACSFin {
         self.mvbas.get(&self.authority).unwrap()
     }
 
-    pub fn ready_for_fin(&self, acs_quorum: Stake) -> bool {
+    /// first_propose_for_fin returns true iff there are exactly n-f certified mvbas
+    pub fn first_propose_for_fin(&self, acs_quorum: Stake) -> bool {
+        self.mvbas
+            .iter()
+            .filter(|(authority, mvba)| {
+                if **authority == self.authority {
+                    if mvba.signatures.len() as u64 >= acs_quorum {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                } else {
+                    // note that except for our own mvba, mvbas of other peers stored in acs_fin are certified, i.e., with 2f+1 signatures
+                    return true;
+                }
+            })
+            .count() as u64
+            == acs_quorum
+    }
+
+    pub fn repropose_for_fin(&self, acs_quorum: Stake) -> bool {
         self.mvbas
             .iter()
             .filter(|(authority, mvba)| {
@@ -534,26 +557,28 @@ impl ACSFin {
             >= acs_quorum
     }
 
-    pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) {
+    pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) -> bool {
         match mvba.round.cmp(&self.last_acs_round) {
             // ignore a mvba with a round equal to the last ACS round
-            Ordering::Less => {}
+            Ordering::Less => false,
             // todo: may need to handle a future certified mvba
             Ordering::Greater => {
                 tracing::warn!("Received a mvba with a round larger than the last ACS round");
+                false
             }
             // receive a new mvba for this stuck round
             Ordering::Equal => {
                 let authority = mvba.authority;
                 if let Err(e) = mvba.verify(&self.committee) {
                     tracing::warn!("Invalid mvba from {}: {:?}", authority, e);
-                    return;
+                    return false;
                 } else {
                     if self.mvbas.contains_key(&authority) {
                         tracing::debug!("Already received a mvba from {}: {:?}", authority, mvba);
-                        return;
+                        return false;
                     }
                     self.mvbas.insert(authority, mvba);
+                    return true;
                 }
             }
         }
@@ -728,13 +753,18 @@ impl ACSFin {
                 .retain(|aux| aux.aux1 != 0);
         }
         // if we have n-f PisaABAAux, then we can enter the agreement phase
-        if self.raba_aux.get(&self.mvba_view).unwrap().len() >= self.committee.acs_quorum_threshold() as usize {
+        if self.raba_aux.get(&self.mvba_view).unwrap().len()
+            >= self.committee.acs_quorum_threshold() as usize
+        {
             if let Some(decided_authority) = self.try_decide() {
                 // if we can decide, then we can commit the ACS
                 if let Some(mvba) = self.mvbas.get(&decided_authority) {
                     return Some(mvba.proposal);
                 } else {
-                    tracing::warn!("We should decide but cannot find the mvba from the decided authority {}", decided_authority);
+                    tracing::warn!(
+                        "We should decide but cannot find the mvba from the decided authority {}",
+                        decided_authority
+                    );
                     // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
                     return Some(0);
                 }
@@ -744,7 +774,7 @@ impl ACSFin {
     }
 
     /// try_decide will return the AuthorityIndex whose mvba proposal has been decided
-    fn try_decide(&mut self) -> Option<AuthorityIndex>{
+    fn try_decide(&mut self) -> Option<AuthorityIndex> {
         let mut decided_value = 2;
         let mut next_est = 2;
         let mut next_maj = 2;
@@ -754,7 +784,9 @@ impl ACSFin {
         let vals = self.get_agreement_phase_vals(self.mvba_view.clone());
         let avals = self.get_agreement_phase_avals(self.mvba_view.clone());
         for new_b in [0, 1] {
-            if self.get_number_of_a_value(&vals, new_b) >= self.committee.acs_raba_decide_threshold() {
+            if self.get_number_of_a_value(&vals, new_b)
+                >= self.committee.acs_raba_decide_threshold()
+            {
                 next_est = new_b;
                 next_maj = new_b;
                 if current_coin == new_b {
@@ -762,15 +794,21 @@ impl ACSFin {
                     decided_value = new_b;
                 }
             }
-            if self.mvba_view.aba_round > 0 && (self.get_only_value(&vals) == 2 || self.get_number_of_a_value(&vals, new_b) < self.committee.acs_raba_decide_threshold()) {
-                if self.get_number_of_a_value(&avals, new_b) >= self.committee.acs_raba_decide_threshold() {
+            if self.mvba_view.aba_round > 0
+                && (self.get_only_value(&vals) == 2
+                    || self.get_number_of_a_value(&vals, new_b)
+                        < self.committee.acs_raba_decide_threshold())
+            {
+                if self.get_number_of_a_value(&avals, new_b)
+                    >= self.committee.acs_raba_decide_threshold()
+                {
                     next_est = new_b;
                     next_maj = new_b;
                     if current_coin == new_b && last_coin == new_b {
                         tracing::info!("RABA decide {} in view {:?}", new_b, self.mvba_view);
                         decided_value = new_b;
                     }
-                } else if avals.contains(&new_b) && new_b ==last_coin {
+                } else if avals.contains(&new_b) && new_b == last_coin {
                     next_est = new_b;
                     next_maj = new_b;
                 }
@@ -789,7 +827,10 @@ impl ACSFin {
         if decided_value == 0 {
             // we have decided 0
             // however, we cannot decide our mvba, enter a new mvba round and choose another mvba value
-            tracing::debug!("Decided 0 in view {:?}, enter a new mvba roudn", self.mvba_view);
+            tracing::debug!(
+                "Decided 0 in view {:?}, enter a new mvba roudn",
+                self.mvba_view
+            );
             let new_view = FINMVBAView::new_with_rounds(self.mvba_view.mvba_round + 1, 0);
             let elected_mvba = self.election(new_view.mvba_round);
             // if we receive elected_mvba, est is set to 1
@@ -806,7 +847,10 @@ impl ACSFin {
             return Some(self.election(self.mvba_view.mvba_round));
         } else {
             // enter next aba round
-            let new_view = FINMVBAView::new_with_rounds(self.mvba_view.mvba_round, self.mvba_view.aba_round + 1);
+            let new_view = FINMVBAView::new_with_rounds(
+                self.mvba_view.mvba_round,
+                self.mvba_view.aba_round + 1,
+            );
             self.new_fin_view(new_view, next_est, next_maj);
             return None;
         }
@@ -900,9 +944,6 @@ impl ACSFin {
 
     /// bin_values
     pub fn get_binary_values_in_view(&self, view: FINMVBAView) -> Vec<BinaryValue> {
-        if self.mvba_view.aba_round == 0 {
-            // todo
-        }
         let mut bvals = HashSet::new();
         // we can only do this when we have n-f PisaABAAux in the view
         if self.raba_aux.get(&view).unwrap().len() < self.committee.acs_quorum_threshold() as usize
@@ -949,7 +990,12 @@ impl ACSFin {
         return majs.into_iter().collect();
     }
 
-    pub fn new_fin_view(&mut self, new_view: FINMVBAView, new_bval: BinaryValue, new_maj: BinaryValue) {
+    pub fn new_fin_view(
+        &mut self,
+        new_view: FINMVBAView,
+        new_bval: BinaryValue,
+        new_maj: BinaryValue,
+    ) {
         self.mvba_view = new_view.clone();
         self.current_bval = new_bval;
         self.current_maj = new_maj;
@@ -963,7 +1009,10 @@ impl ACSFin {
         }
         let aux_count = self.raba_aux.get(&view).unwrap().len();
         if aux_count < self.committee.acs_quorum_threshold() as usize {
-            tracing::warn!("Error, we won't trigger this function if we received less than {} aux", self.committee.acs_quorum_threshold());
+            tracing::warn!(
+                "Error, we won't trigger this function if we received less than {} aux",
+                self.committee.acs_quorum_threshold()
+            );
         }
         // we collect all aux1 of self.raba_aux into return_vals
         for aux in self.raba_aux.get(&view).unwrap() {
@@ -971,7 +1020,7 @@ impl ACSFin {
         }
         return_vals
     }
-    
+
     /// Agreement phase: avals
     pub fn get_agreement_phase_avals(&self, view: FINMVBAView) -> Vec<BinaryValue> {
         let mut return_avals = Vec::new();
@@ -980,7 +1029,10 @@ impl ACSFin {
         }
         let aux_count = self.raba_aux.get(&view).unwrap().len();
         if aux_count < self.committee.acs_quorum_threshold() as usize {
-            tracing::warn!("Error, we won't trigger this function if we received less than {} aux", self.committee.acs_quorum_threshold());
+            tracing::warn!(
+                "Error, we won't trigger this function if we received less than {} aux",
+                self.committee.acs_quorum_threshold()
+            );
         }
         // we collect all aux2 of self.raba_aux into return_avals
         for aux in self.raba_aux.get(&view).unwrap() {
@@ -1083,7 +1135,14 @@ impl ACSFin {
     pub fn delta_b(&self, est: BinaryValue) -> BinaryValue {
         let mut delta_b = 2;
         // we are not ready to set delta_b for this view
-        if self.raba_bvals.get(&self.mvba_view).unwrap().iter().filter(|&b| b.est == est).count() < self.committee.acs_quorum_threshold() as usize
+        if self
+            .raba_bvals
+            .get(&self.mvba_view)
+            .unwrap()
+            .iter()
+            .filter(|&b| b.est == est)
+            .count()
+            < self.committee.acs_quorum_threshold() as usize
         {
             return delta_b;
         }

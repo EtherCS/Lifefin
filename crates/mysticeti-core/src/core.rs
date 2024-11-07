@@ -15,7 +15,8 @@ use minibytes::Bytes;
 use crate::{
     acs_manager::ACSManager,
     acs_types::{
-        ACSOutput, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
+        ACSOutput, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal, MVBAVote,
+        PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote,
     },
     block_handler::BlockHandler,
     block_manager::BlockManager,
@@ -275,8 +276,7 @@ impl<H: BlockHandler> Core<H> {
             self.acs_manager.add_post_block(post_block);
         }
         // if we receive 2f+1 post blocks, we are ready to propose MVBA
-        if self.acs_manager.ready_for_mvba()
-        {
+        if self.acs_manager.ready_for_mvba() {
             self.try_broadcast_mvba();
             // if we are not in fallback mode, switch to fallback mode
             if self.consensus_mode == ConsensusMode::Optimistic {
@@ -316,11 +316,7 @@ impl<H: BlockHandler> Core<H> {
 
     /// We broadcast own MVBA here
     fn try_broadcast_mvba(&mut self) {
-        let mvba = self
-            .acs_manager
-            .acs_fin
-            .get_own_mvba()
-            .clone();
+        let mvba = self.acs_manager.acs_fin.get_own_mvba().clone();
         let rt = Runtime::new().unwrap();
         // if we are certified, broadcast mvba
         if mvba.is_certified(self.committee.acs_quorum_threshold()) {
@@ -342,9 +338,7 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_mvba_votes");
-        let new_mvbas = self
-            .acs_manager
-            .add_mvba_votes(mvba_votes);
+        let new_mvbas = self.acs_manager.add_mvba_votes(mvba_votes);
         // if we just received enough votes for a new mvba, broadcast it
         for new_mvba in new_mvbas {
             let rt = Runtime::new().unwrap();
@@ -372,33 +366,68 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_certified_mvbas");
+        let mut new_added_mvbas = Vec::new();
         for mvba in mvbas {
-            self.acs_manager
-                .add_certified_mvba(mvba);
+            if self.acs_manager.add_certified_mvba(mvba.clone()) {
+                new_added_mvbas.push(mvba);
+            }
         }
-        if self
-            .acs_manager
-            .ready_for_fin()
-        {
-            // todo: now we enter the MVBA process of FIN protocol
-            let new_view = FINMVBAView::new();
-            let elected_mvba = self
-                .acs_manager
-                .acs_fin
-                .election(new_view.mvba_round);
-            if let Some(_est0) = self
-                .acs_manager
-                .acs_fin
-                .mvbas
-                .get(&elected_mvba)
-            {
-                // we have received this mvba
+        if !new_added_mvbas.is_empty() {
+            // note that this only runs once when #mvba = n-f
+            if self.acs_manager.first_propose_for_fin() {
+                // now we enter the MVBA process of FIN protocol
+                let new_view = FINMVBAView::new();
+                let elected_mvba = self.acs_manager.acs_fin.election(new_view.mvba_round);
+                let maj = 2;
+                let mut est = 0;
+                if let Some(_est0) = self.acs_manager.acs_fin.mvbas.get(&elected_mvba) {
+                    // we have received this mvba
+                    est = 1;
+                }
+                // broadcast bval for the mvba round 0
                 self.acs_manager
-                    .enter_fin_mvba(FINMVBAView::new(), 1, 2);
-            } else {
-                // we have not received this mvba
-                self.acs_manager
-                    .enter_fin_mvba(FINMVBAView::new(), 0, 2);
+                    .enter_fin_mvba(FINMVBAView::new(), est, maj);
+                let new_own_bval =
+                    PisaABABval::new(new_view, est, maj, self.authority, &self.signer);
+                let rt_own = Runtime::new().unwrap();
+                // broadcast our own pisa bval
+                rt_own
+                    .block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_own_bval.clone())));
+                // also add the our created PisaABABval
+                let pisa_messages = self
+                    .acs_manager
+                    .add_pisa_aba_bvals(vec![new_own_bval], &self.signer);
+                for pisa_msg in pisa_messages {
+                    let rt = Runtime::new().unwrap();
+                    match pisa_msg {
+                        PisaABAMessage::PisaABABval(new_bval) => {
+                            tracing::debug!("Create and broadcast own bval {:?}", new_bval);
+                            rt.block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_bval)));
+                        }
+                        PisaABAMessage::PisaABAAux(new_aux) => {
+                            tracing::debug!("Create and broadcast own aux {:?}", new_aux);
+                            rt.block_on(self.broadcast(NetworkMessage::PisaABAAuxiliary(new_aux)));
+                        }
+                    }
+                }
+            }
+            // repropose 1 for the 0th aba round if needed
+            if self.acs_manager.repropose_for_fin() {
+                for new_added_mvba in new_added_mvbas {
+                    let authority_index = new_added_mvba.authority;
+                    if self.acs_manager.acs_fin.mvba_view.mvba_round >= authority_index {
+                        // we miss propose 0 for this mvba, now repropose 1 for it
+                        // todo: currently, we only consider authority indices start from 0 and are consecutive
+                        let new_view = FINMVBAView::new_with_rounds(authority_index, 0);
+                        let new_bval =
+                            PisaABABval::new(new_view, 1, 2, self.authority, &self.signer);
+                        let rt = Runtime::new().unwrap();
+                        rt.block_on(
+                            self.broadcast(NetworkMessage::PisaABABvalue(new_bval.clone())),
+                        );
+                    }
+                    // otherwise, we don't need to repropose as we haven't enter that mvba round
+                }
             }
         }
     }
@@ -408,18 +437,16 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_bvalues");
-        let pisa_messages = self
-            .acs_manager
-            .add_pisa_aba_bvals(bvals, &self.signer);
+        let pisa_messages = self.acs_manager.add_pisa_aba_bvals(bvals, &self.signer);
         for pisa_msg in pisa_messages {
             let rt = Runtime::new().unwrap();
             match pisa_msg {
                 PisaABAMessage::PisaABABval(new_bval) => {
-                    tracing::debug!("Create and braodcast own bval {:?}", new_bval);
+                    tracing::debug!("Create and broadcast own bval {:?}", new_bval);
                     rt.block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_bval)));
                 }
                 PisaABAMessage::PisaABAAux(new_aux) => {
-                    tracing::debug!("Create and braodcast own aux {:?}", new_aux);
+                    tracing::debug!("Create and broadcast own aux {:?}", new_aux);
                     rt.block_on(self.broadcast(NetworkMessage::PisaABAAuxiliary(new_aux)));
                 }
             }
@@ -431,17 +458,11 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_auxiliaries");
-        if let Some(mvba) = self
-            .acs_manager
-            .add_pisa_aba_auxs(bvals)
-        {
+        if let Some(mvba) = self.acs_manager.add_pisa_aba_auxs(bvals) {
             // we are able to decide and complish the ACS process
             if mvba == 0 {
                 // this means that we haven't received the mvba
-                let decided_mvba_from = self
-                    .acs_manager
-                    .acs_fin
-                    .current_election();
+                let decided_mvba_from = self.acs_manager.acs_fin.current_election();
                 // todo: send request to other peers to get the decided mvba
             } else {
                 // we need to collect all indexes such that the i-th index of mvba is 1
@@ -458,13 +479,9 @@ impl<H: BlockHandler> Core<H> {
                 // We have this mvba, then we need to ensure we also have all associated post blocks
                 let mut post_blocks = Vec::new();
                 let mut missing_post_blocks_from = Vec::new();
-                let mut acs_round = 0;  // the round if the acs is completed, which is the highest round of the post blocks
+                let mut acs_round = 0; // the round if the acs is completed, which is the highest round of the post blocks
                 for index in mvba_index {
-                    if let Some(post_block) = self
-                        .acs_manager
-                        .post_blocks
-                        .get(&index)
-                    {
+                    if let Some(post_block) = self.acs_manager.post_blocks.get(&index) {
                         post_blocks.push(post_block);
                         if post_block.stuck_block.reference().round > acs_round {
                             acs_round = post_block.stuck_block.reference().round;
@@ -474,7 +491,10 @@ impl<H: BlockHandler> Core<H> {
                     }
                 }
                 if missing_post_blocks_from.is_empty() {
-                    let state_blocks: Vec<Data<StatementBlock>> = post_blocks.iter().map(|post_block| post_block.stuck_block.clone()).collect();
+                    let state_blocks: Vec<Data<StatementBlock>> = post_blocks
+                        .iter()
+                        .map(|post_block| post_block.stuck_block.clone())
+                        .collect();
                     let acs_output = ACSOutput::new(acs_round, state_blocks);
                     // Fortunately, we have all post blocks, then we can commit the mvba
                     self.commit_acs(acs_output);
@@ -492,14 +512,12 @@ impl<H: BlockHandler> Core<H> {
     /// 3) todo: almost run out of memory
     fn switch_to_fallback(&mut self) {
         // create own certified post block
-        let my_certified_post_block = self
-            .acs_manager
-            .create_own_post_block(
-                self.last_own_block.block.clone().reference().round,
-                self.last_own_block.block.clone(),
-                self.last_seen_blocks.clone(),
-                self.signer.clone(),
-            );
+        let my_certified_post_block = self.acs_manager.create_own_post_block(
+            self.last_own_block.block.clone().reference().round,
+            self.last_own_block.block.clone(),
+            self.last_seen_blocks.clone(),
+            self.signer.clone(),
+        );
         // we use tokio::runtime::Runtime to support calling async function in sync function
         let rt = Runtime::new().unwrap();
         if (my_certified_post_block.signatures.len() as Stake)
@@ -526,8 +544,7 @@ impl<H: BlockHandler> Core<H> {
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
         // todo: commit all history blocks based on acs_output
         self.consensus_mode = ConsensusMode::Optimistic;
-        self.acs_manager
-            .reset();
+        self.acs_manager.reset();
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {

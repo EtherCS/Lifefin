@@ -1,6 +1,7 @@
 use crate::{
     acs_types::{
-        ACSFin, BinaryValue, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBA, MVBAProposal, MVBAVote, MetaPoSTBlockData, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote
+        ACSFin, BinaryValue, CertifiedMVBA, CertifiedPoSTBlockData, FINMVBAView, MVBAProposal,
+        MVBAVote, MetaPoSTBlockData, PisaABAAux, PisaABABval, PisaABAMessage, PoSTBlockVote, MVBA,
     },
     committee::Committee,
     crypto::{PublicKey, Signer},
@@ -10,7 +11,6 @@ use crate::{
 
 use std::collections::HashMap;
 use std::{cmp::Ordering, collections::BTreeMap};
-
 
 #[derive(Clone)]
 pub struct ACSManager {
@@ -343,8 +343,8 @@ impl ACSManager {
         return_mvbas
     }
 
-    pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) {
-        self.acs_fin.add_certified_mvba(mvba);
+    pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) -> bool {
+        self.acs_fin.add_certified_mvba(mvba)
     }
 
     pub fn add_pisa_aba_bvals(
@@ -369,12 +369,22 @@ impl ACSManager {
             >= self.committee.acs_quorum_threshold()
     }
 
-    pub fn ready_for_fin(&self) -> bool {
+    pub fn first_propose_for_fin(&self) -> bool {
         self.acs_fin
-            .ready_for_fin(self.committee.acs_quorum_threshold())
+            .first_propose_for_fin(self.committee.acs_quorum_threshold())
     }
 
-    pub fn enter_fin_mvba(&mut self, new_view: FINMVBAView, new_bval: BinaryValue, new_maj: BinaryValue) {
+    pub fn repropose_for_fin(&self) -> bool {
+        self.acs_fin
+            .repropose_for_fin(self.committee.acs_quorum_threshold())
+    }
+
+    pub fn enter_fin_mvba(
+        &mut self,
+        new_view: FINMVBAView,
+        new_bval: BinaryValue,
+        new_maj: BinaryValue,
+    ) {
         self.acs_fin.new_fin_view(new_view, new_bval, new_maj);
     }
 
