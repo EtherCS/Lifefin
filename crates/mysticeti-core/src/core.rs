@@ -550,8 +550,11 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
         // todo: commit all history blocks based on acs_output
+        let new_leader_block = acs_output.new_leader(&self.committer);
+        tracing::debug!("Committing ACS output {:?}", acs_output);
+        tracing::debug!("New leader block {:?}", new_leader_block);
         self.consensus_mode = ConsensusMode::Optimistic;
-        self.acs_manager.reset();
+        self.acs_manager.reset(acs_output.round);
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {

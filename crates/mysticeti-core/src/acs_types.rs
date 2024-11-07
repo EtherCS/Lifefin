@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
+    fmt,
 };
 
 pub type MVBARoundNumber = u64;
@@ -324,7 +325,7 @@ impl CertifiedMVBA {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ACSOutput {
     pub round: RoundNumber, // the highest round agreed by the ACS mode
     pub blocks: Vec<Data<StatementBlock>>,
@@ -339,7 +340,7 @@ impl ACSOutput {
         self.round
     }
 
-    pub fn new_leader(&self, committer: UniversalCommitter) -> Data<StatementBlock> {
+    pub fn new_leader(&self, committer: &UniversalCommitter) -> Data<StatementBlock> {
         // collect the blocks with the highest round
         let highest_blocks: Vec<&Data<StatementBlock>> = self
             .blocks
@@ -362,6 +363,13 @@ impl ACSOutput {
         leader_block
     }
 }
+
+impl fmt::Debug for ACSOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ACSOutput {{ round: {}, {:?} }}", self.round, self.blocks)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FINMVBAView {
     pub mvba_round: MVBARoundNumber, // the (FIN) mvba round number
@@ -1195,6 +1203,16 @@ impl ACSFin {
 
     pub fn raba_decide(&mut self) {
         // todo
+    }
+
+    pub fn reset(&mut self, latest_commit_round: RoundNumber) {
+        self.last_acs_round = latest_commit_round;
+        self.mvbas.clear();
+        self.current_bval = 0;
+        self.current_maj = 2;
+        self.mvba_view = FINMVBAView::new();
+        self.raba_bvals.clear();
+        self.raba_aux.clear();
     }
 
     /// todo: random

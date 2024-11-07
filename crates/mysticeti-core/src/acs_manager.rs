@@ -403,9 +403,11 @@ impl ACSManager {
         self.round
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, latest_commit_round: RoundNumber) {
+        self.round = latest_commit_round;
+        self.last_seen_meta_post_blocks.clear();
         self.post_blocks.clear();
-        // todo
-        // self.mvba = 0;
+        self.acs_fin.reset(latest_commit_round);
+        self.last_seen_mvba_proposal.clear();
     }
 }
