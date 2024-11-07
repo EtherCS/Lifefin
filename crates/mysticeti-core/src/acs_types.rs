@@ -538,6 +538,7 @@ impl ACSFin {
             == acs_quorum
     }
 
+    /// repropose_for_fin returns true if there are more than n-f certified mvbas
     pub fn repropose_for_fin(&self, acs_quorum: Stake) -> bool {
         self.mvbas
             .iter()
@@ -554,9 +555,10 @@ impl ACSFin {
                 }
             })
             .count() as u64
-            >= acs_quorum
+            > acs_quorum
     }
-
+    
+    /// add_certified_mvba returns true if the mvba is added successfully
     pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) -> bool {
         match mvba.round.cmp(&self.last_acs_round) {
             // ignore a mvba with a round equal to the last ACS round
@@ -945,14 +947,44 @@ impl ACSFin {
     /// bin_values
     pub fn get_binary_values_in_view(&self, view: FINMVBAView) -> Vec<BinaryValue> {
         let mut bvals = HashSet::new();
+        if view > self.mvba_view {
+            tracing::warn!("Fail to get binary values: The view is in the future");
+            return bvals.into_iter().collect();
+        }
         // we can only do this when we have n-f PisaABAAux in the view
         if self.raba_aux.get(&view).unwrap().len() < self.committee.acs_quorum_threshold() as usize
         {
             tracing::warn!("Fail to get binary values: Not enough PisaABAAux in the view");
             return bvals.into_iter().collect();
         }
-        for bval in self.raba_bvals.get(&view).unwrap() {
-            bvals.insert(bval.est);
+        if view.aba_round == 0 {
+            if let Some(raba_bvals) = self.raba_bvals.get(&view) {
+                // if our own bval.est = 1, then we add it to the bin_values
+                if raba_bvals.iter().any(|bval| bval.authority == self.authority && bval.est == 1)
+                {
+                    bvals.insert(1);
+                }
+            }
+        }
+        let bval_with_zero = self
+            .raba_bvals
+            .get(&view.clone())
+            .unwrap()
+            .iter()
+            .filter(|&bval| bval.est == 0)
+            .count();
+        if bval_with_zero >= (self.committee.acs_quorum_threshold() as usize) {
+            bvals.insert(0);
+        }
+        let bval_with_one = self
+            .raba_bvals
+            .get(&view.clone())
+            .unwrap()
+            .iter()
+            .filter(|&bval| bval.est == 1)
+            .count();
+        if bval_with_one >= (self.committee.acs_quorum_threshold() as usize) {
+            bvals.insert(1);
         }
         return bvals.into_iter().collect();
     }
@@ -963,6 +995,10 @@ impl ACSFin {
             // todo
         }
         let mut majs = HashSet::new();
+        if view > self.mvba_view {
+            tracing::warn!("Fail to get majs: The view is in the future");
+            return majs.into_iter().collect();
+        }
         // we can only do this when we have n-f PisaABABval with est=0 (or est=1) in the view
         let bval_with_zero = self
             .raba_bvals
