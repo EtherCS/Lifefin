@@ -557,7 +557,7 @@ impl ACSFin {
             .count() as u64
             > acs_quorum
     }
-    
+
     /// add_certified_mvba returns true if the mvba is added successfully
     pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) -> bool {
         match mvba.round.cmp(&self.last_acs_round) {
@@ -644,14 +644,9 @@ impl ACSFin {
                         .push(bval.clone());
                     // we handle the pisa aba bval differently if we are in the 0-th aba round
                     if self.mvba_view.aba_round == 0 {
-                        if bval.authority == self.authority{
-                            let return_aux = PisaABAAux::new(
-                                bval.view.clone(),
-                                1,
-                                1,
-                                self.authority,
-                                signer,
-                            );
+                        if bval.authority == self.authority {
+                            let return_aux =
+                                PisaABAAux::new(bval.view.clone(), 1, 1, self.authority, signer);
                             return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                         } else {
                             let est = bval.est;
@@ -668,17 +663,22 @@ impl ACSFin {
                                     return_messages.push(PisaABAMessage::PisaABABval(return_bval));
                                 }
                                 if est == 1 {
-                                    if let Some(return_aux) = self.create_aux_with_inputs(bval.view.clone(), 1, 1, signer) {
-                                        return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
+                                    if let Some(return_aux) =
+                                        self.create_aux_with_inputs(bval.view.clone(), 1, 1, signer)
+                                    {
+                                        return_messages
+                                            .push(PisaABAMessage::PisaABAAux(return_aux));
                                     }
                                 }
                             }
                             if est_count >= self.committee.acs_quorum_threshold() as usize {
-                                if let Some(return_aux) = self.create_aux_with_inputs(bval.view.clone(), est, est, signer) {
+                                if let Some(return_aux) =
+                                    self.create_aux_with_inputs(bval.view.clone(), est, est, signer)
+                                {
                                     return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                                 }
                             }
-                        }                        
+                        }
                     } else {
                         let est = bval.est;
                         let est_count = self
@@ -709,9 +709,6 @@ impl ACSFin {
     }
 
     pub fn add_pisa_aba_auxs(&mut self, auxs: Vec<PisaABAAux>) -> Option<MVBA> {
-        if self.mvba_view.aba_round == 0 {
-            // todo
-        }
         for aux in auxs {
             if let Err(e) = aux.verify(&self.committee) {
                 tracing::warn!("Invalid pisa aba aux from {}: {:?}", aux.author(), e);
@@ -776,6 +773,7 @@ impl ACSFin {
                 }
             }
         }
+
         // discard invalid aux if delta_b is 1
         if self.delta_b(0) == 1 {
             // discard all aux with aux1 = 1
@@ -794,21 +792,72 @@ impl ACSFin {
         if self.raba_aux.get(&self.mvba_view).unwrap().len()
             >= self.committee.acs_quorum_threshold() as usize
         {
-            if let Some(decided_authority) = self.try_decide() {
-                // if we can decide, then we can commit the ACS
-                if let Some(mvba) = self.mvbas.get(&decided_authority) {
-                    return Some(mvba.proposal);
-                } else {
-                    tracing::warn!(
-                        "We should decide but cannot find the mvba from the decided authority {}",
-                        decided_authority
-                    );
-                    // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
-                    return Some(0);
+            if self.mvba_view.aba_round == 0 {
+                if let Some(decided_authority) = self.try_decide_in_round_0() {
+                    // if we can decide, then we can commit the ACS
+                    if let Some(mvba) = self.mvbas.get(&decided_authority) {
+                        return Some(mvba.proposal);
+                    } else {
+                        tracing::warn!(
+                            "We should decide but cannot find the mvba from the decided authority {}",
+                            decided_authority
+                        );
+                        // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
+                        return Some(0);
+                    }
+                }
+            } else {
+                if let Some(decided_authority) = self.try_decide() {
+                    // if we can decide, then we can commit the ACS
+                    if let Some(mvba) = self.mvbas.get(&decided_authority) {
+                        return Some(mvba.proposal);
+                    } else {
+                        tracing::warn!(
+                            "We should decide but cannot find the mvba from the decided authority {}",
+                            decided_authority
+                        );
+                        // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
+                        return Some(0);
+                    }
                 }
             }
         }
         return None;
+    }
+
+    /// try_decide_in_round_0 will return the AuthorityIndex whose mvba proposal has been decided
+    fn try_decide_in_round_0(&mut self) -> Option<AuthorityIndex> {
+        let mut decided_value = 2;
+        let mut next_est = 2;
+        let mut next_maj = 2;
+        let current_coin = 1;
+        let vals = self.get_agreement_phase_vals(self.mvba_view.clone());
+        for new_b in [0, 1] {
+            if self.get_number_of_a_value(&vals, new_b)
+                >= self.committee.acs_raba_decide_threshold()
+            {
+                next_est = new_b;
+                next_maj = new_b;
+                if new_b == current_coin {
+                    decided_value = 1;
+                }
+            } else {
+                next_est = 1;
+                next_maj = 1;
+            }
+        }
+        if decided_value == 1 {
+            tracing::info!("RABA decide {} in view {:?}", 1, self.mvba_view);
+            return Some(self.election(self.mvba_view.mvba_round));
+        } else {
+            // unfortunately, we cannot decide, enter next aba round
+            let new_view = FINMVBAView::new_with_rounds(
+                self.mvba_view.mvba_round,
+                self.mvba_view.aba_round + 1,
+            );
+            self.new_fin_view(new_view, next_est, next_maj);
+            return None;
+        }
     }
 
     /// try_decide will return the AuthorityIndex whose mvba proposal has been decided
@@ -934,10 +983,25 @@ impl ACSFin {
         None
     }
 
-    fn create_aux_with_inputs(&mut self, view: FINMVBAView, aux1: BinaryValue, aux2: BinaryValue, signer: &Signer) -> Option<PisaABAAux> {
-        if !self.raba_aux.get(&view).unwrap().iter().any(|aux| aux.authority == self.authority && aux.aux1 == aux1 && aux.aux2 == aux2) {
+    fn create_aux_with_inputs(
+        &mut self,
+        view: FINMVBAView,
+        aux1: BinaryValue,
+        aux2: BinaryValue,
+        signer: &Signer,
+    ) -> Option<PisaABAAux> {
+        if !self
+            .raba_aux
+            .get(&view)
+            .unwrap()
+            .iter()
+            .any(|aux| aux.authority == self.authority && aux.aux1 == aux1 && aux.aux2 == aux2)
+        {
             let new_aux = PisaABAAux::new(view.clone(), aux1, aux2, self.authority, signer);
-            self.raba_aux.entry(view.clone()).or_insert(Vec::new()).push(new_aux.clone());
+            self.raba_aux
+                .entry(view.clone())
+                .or_insert(Vec::new())
+                .push(new_aux.clone());
             return Some(new_aux);
         }
         None
@@ -1019,8 +1083,7 @@ impl ACSFin {
         if view.aba_round == 0 {
             if let Some(raba_bvals) = self.raba_bvals.get(&view) {
                 // if our own bval.est = 1 or we receive a bval.est = 1, then we add it to the bin_values
-                if raba_bvals.iter().any(|bval| bval.est == 1)
-                {
+                if raba_bvals.iter().any(|bval| bval.est == 1) {
                     bvals.insert(1);
                 }
             }

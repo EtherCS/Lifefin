@@ -343,6 +343,7 @@ impl ACSManager {
         return_mvbas
     }
 
+    /// add_certified_mvba returns true if the mvba is added successfully
     pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) -> bool {
         self.acs_fin.add_certified_mvba(mvba)
     }
@@ -369,11 +370,13 @@ impl ACSManager {
             >= self.committee.acs_quorum_threshold()
     }
 
+    /// first_propose_for_fin returns true iff there are exactly n-f certified mvbas
     pub fn first_propose_for_fin(&self) -> bool {
         self.acs_fin
             .first_propose_for_fin(self.committee.acs_quorum_threshold())
     }
 
+    /// repropose_for_fin returns true if there are more than n-f certified mvbas
     pub fn repropose_for_fin(&self) -> bool {
         self.acs_fin
             .repropose_for_fin(self.committee.acs_quorum_threshold())

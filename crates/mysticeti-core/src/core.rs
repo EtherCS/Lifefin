@@ -374,7 +374,13 @@ impl<H: BlockHandler> Core<H> {
         }
         if !new_added_mvbas.is_empty() {
             // note that this only runs once when #mvba = n-f
+            // warn: new_added_mvbas is a vector, leading that we might skip first_propose_for_fin()
+            // todo: make first_propose_for_fin more general, it's ok to use it since the length of current new_added_mvbas is always <= 1
             if self.acs_manager.first_propose_for_fin() {
+                tracing::debug!(
+                    "Received {} proposals, enter the mvba of FIN protocol",
+                    self.acs_manager.acs_fin.mvbas.len()
+                );
                 // now we enter the MVBA process of FIN protocol
                 let new_view = FINMVBAView::new();
                 let elected_mvba = self.acs_manager.acs_fin.election(new_view.mvba_round);
@@ -414,10 +420,11 @@ impl<H: BlockHandler> Core<H> {
             // repropose 1 for the 0th aba round if needed
             if self.acs_manager.repropose_for_fin() {
                 for new_added_mvba in new_added_mvbas {
+                    tracing::debug!("Repropose for mvba {:?}", new_added_mvba);
                     let authority_index = new_added_mvba.authority;
                     if self.acs_manager.acs_fin.mvba_view.mvba_round >= authority_index {
                         // we miss propose 0 for this mvba, now repropose 1 for it
-                        // todo: currently, we only consider authority indices start from 0 and are consecutive
+                        // todo: currently, we only consider authority indices start from 0 and are consecutive, i.e., [0,1,2,...]
                         let new_view = FINMVBAView::new_with_rounds(authority_index, 0);
                         let new_bval =
                             PisaABABval::new(new_view, 1, 2, self.authority, &self.signer);
