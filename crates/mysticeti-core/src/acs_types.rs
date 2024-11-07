@@ -592,9 +592,6 @@ impl ACSFin {
         signer: &Signer,
     ) -> Vec<PisaABAMessage> {
         let mut return_messages = Vec::new();
-        if self.mvba_view.aba_round == 0 {
-            // todo
-        }
         for bval in bvals {
             if let Err(e) = bval.verify(&self.committee) {
                 tracing::warn!("Invalid pisa aba bval from {}: {:?}", bval.author(), e);
@@ -645,25 +642,64 @@ impl ACSFin {
                         .entry(bval.view.clone())
                         .or_insert(Vec::new())
                         .push(bval.clone());
-                    let est = bval.est;
-                    let est_count = self
-                        .raba_bvals
-                        .get(&bval.view)
-                        .unwrap()
-                        .iter()
-                        .filter(|&b| b.est == est)
-                        .count();
-                    // receive n-f PisaABABval with the same est value, enter the agreement phase
-                    if est_count >= self.committee.acs_quorum_threshold() as usize {
-                        if let Some(return_aux) = self.create_aux(bval.clone(), signer) {
+                    // we handle the pisa aba bval differently if we are in the 0-th aba round
+                    if self.mvba_view.aba_round == 0 {
+                        if bval.authority == self.authority{
+                            let return_aux = PisaABAAux::new(
+                                bval.view.clone(),
+                                1,
+                                1,
+                                self.authority,
+                                signer,
+                            );
                             return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
+                        } else {
+                            let est = bval.est;
+                            let est_count = self
+                                .raba_bvals
+                                .get(&bval.view)
+                                .unwrap()
+                                .iter()
+                                .filter(|&b| b.est == est)
+                                .count();
+                            if est_count >= self.committee.acs_validity_threshold() as usize {
+                                // if we haven't send this bval, then do it
+                                if let Some(return_bval) = self.create_bval(bval.clone(), signer) {
+                                    return_messages.push(PisaABAMessage::PisaABABval(return_bval));
+                                }
+                                if est == 1 {
+                                    if let Some(return_aux) = self.create_aux_with_inputs(bval.view.clone(), 1, 1, signer) {
+                                        return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
+                                    }
+                                }
+                            }
+                            if est_count >= self.committee.acs_quorum_threshold() as usize {
+                                if let Some(return_aux) = self.create_aux_with_inputs(bval.view.clone(), est, est, signer) {
+                                    return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
+                                }
+                            }
+                        }                        
+                    } else {
+                        let est = bval.est;
+                        let est_count = self
+                            .raba_bvals
+                            .get(&bval.view)
+                            .unwrap()
+                            .iter()
+                            .filter(|&b| b.est == est)
+                            .count();
+                        // receive f+1 PisaABABval with the same est value
+                        if est_count >= self.committee.acs_validity_threshold() as usize {
+                            // if we haven't send this bval, then do it
+                            if let Some(return_bval) = self.create_bval(bval.clone(), signer) {
+                                return_messages.push(PisaABAMessage::PisaABABval(return_bval));
+                            }
                         }
-                    }
-                    // receive f+1 PisaABABval with the same est value
-                    else if est_count >= self.committee.acs_validity_threshold() as usize {
-                        // if we haven't send this bval, then do it
-                        if let Some(return_bval) = self.create_bval(bval.clone(), signer) {
-                            return_messages.push(PisaABAMessage::PisaABABval(return_bval));
+                        // receive n-f PisaABABval with the same est value, enter the agreement phase
+                        if est_count >= self.committee.acs_quorum_threshold() as usize {
+                            if let Some(return_aux) = self.create_aux(bval.clone(), signer) {
+                                return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
+                            }
                         }
                     }
                 }
@@ -898,6 +934,15 @@ impl ACSFin {
         None
     }
 
+    fn create_aux_with_inputs(&mut self, view: FINMVBAView, aux1: BinaryValue, aux2: BinaryValue, signer: &Signer) -> Option<PisaABAAux> {
+        if !self.raba_aux.get(&view).unwrap().iter().any(|aux| aux.authority == self.authority && aux.aux1 == aux1 && aux.aux2 == aux2) {
+            let new_aux = PisaABAAux::new(view.clone(), aux1, aux2, self.authority, signer);
+            self.raba_aux.entry(view.clone()).or_insert(Vec::new()).push(new_aux.clone());
+            return Some(new_aux);
+        }
+        None
+    }
+
     fn create_bval(&mut self, bval: PisaABABval, signer: &Signer) -> Option<PisaABABval> {
         let est = bval.est;
         if !self
@@ -957,15 +1002,6 @@ impl ACSFin {
             tracing::warn!("Fail to get binary values: Not enough PisaABAAux in the view");
             return bvals.into_iter().collect();
         }
-        if view.aba_round == 0 {
-            if let Some(raba_bvals) = self.raba_bvals.get(&view) {
-                // if our own bval.est = 1, then we add it to the bin_values
-                if raba_bvals.iter().any(|bval| bval.authority == self.authority && bval.est == 1)
-                {
-                    bvals.insert(1);
-                }
-            }
-        }
         let bval_with_zero = self
             .raba_bvals
             .get(&view.clone())
@@ -973,9 +1009,6 @@ impl ACSFin {
             .iter()
             .filter(|&bval| bval.est == 0)
             .count();
-        if bval_with_zero >= (self.committee.acs_quorum_threshold() as usize) {
-            bvals.insert(0);
-        }
         let bval_with_one = self
             .raba_bvals
             .get(&view.clone())
@@ -983,6 +1016,18 @@ impl ACSFin {
             .iter()
             .filter(|&bval| bval.est == 1)
             .count();
+        if view.aba_round == 0 {
+            if let Some(raba_bvals) = self.raba_bvals.get(&view) {
+                // if our own bval.est = 1 or we receive a bval.est = 1, then we add it to the bin_values
+                if raba_bvals.iter().any(|bval| bval.est == 1)
+                {
+                    bvals.insert(1);
+                }
+            }
+        }
+        if bval_with_zero >= (self.committee.acs_quorum_threshold() as usize) {
+            bvals.insert(0);
+        }
         if bval_with_one >= (self.committee.acs_quorum_threshold() as usize) {
             bvals.insert(1);
         }
