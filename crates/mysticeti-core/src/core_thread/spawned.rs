@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote,
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote
     },
     block_handler::BlockHandler,
     data::Data,
@@ -39,6 +39,7 @@ enum CoreThreadCommand {
     ConnectionDropped(AuthorityIndex, oneshot::Sender<()>),
     AddPoSTBlocks(Vec<CertifiedPoSTBlockData>, oneshot::Sender<()>),
     AddPoSTBlockVotes(Vec<PoSTBlockVote>, oneshot::Sender<()>),
+    AddMVBAProposal(Vec<MVBAProposal>, oneshot::Sender<()>),
     AddMVBAVote(Vec<MVBAVote>, oneshot::Sender<()>),
     AddCertifiedMVBA(Vec<CertifiedMVBA>, oneshot::Sender<()>),
     AddPisaABABvalues(Vec<PisaABABval>, oneshot::Sender<()>),
@@ -78,6 +79,13 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
     pub async fn add_post_blocks(&self, blocks: Vec<CertifiedPoSTBlockData>) {
         let (sender, receiver) = oneshot::channel();
         self.send(CoreThreadCommand::AddPoSTBlocks(blocks, sender))
+            .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_mvba_proposals(&self, mvba_proposals: Vec<MVBAProposal>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddMVBAProposal(mvba_proposals, sender))
             .await;
         receiver.await.expect("core thread is not expected to stop");
     }
@@ -198,6 +206,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                 }
                 CoreThreadCommand::AddPoSTBlockVotes(post_block_votes, sender) => {
                     self.syncer.add_post_block_votes(post_block_votes);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddMVBAProposal(mvba_proposals, sender) => {
+                    self.syncer.add_mvba_proposals(mvba_proposals);
                     sender.send(()).ok();
                 }
                 CoreThreadCommand::AddMVBAVote(mvba_votes, sender) => {

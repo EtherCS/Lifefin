@@ -23,7 +23,7 @@ use tokio::{
 
 use crate::{
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote,
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote
     },
     config::NodePublicConfig,
     data::Data,
@@ -46,6 +46,7 @@ pub enum NetworkMessage {
     ProofOfStuckBlockVote(PoSTBlockVote),
     ProofOfStuckBlock(CertifiedPoSTBlockData),
     MVBAVote(MVBAVote),
+    MVBAProposal(MVBAProposal),
     CertifiedMVBA(CertifiedMVBA),
     PisaABABvalue(PisaABABval),
     PisaABAAuxiliary(PisaABAAux),
