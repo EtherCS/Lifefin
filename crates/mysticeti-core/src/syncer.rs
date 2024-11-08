@@ -6,7 +6,10 @@ use std::{collections::HashSet, sync::Arc};
 use minibytes::Bytes;
 
 use crate::{
-    acs_types::{CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote},
+    acs_types::{
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
+        PoSTBlockVote,
+    },
     block_handler::BlockHandler,
     block_store::BlockStore,
     consensus::linearizer::CommittedSubDag,
@@ -149,11 +152,8 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
                     false
                 }
             }
-            ConsensusMode::Fallback => {
-                false
-            }
+            ConsensusMode::Fallback => false,
         }
-        
     }
 
     fn try_new_block(&mut self) {

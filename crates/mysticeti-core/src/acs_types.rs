@@ -211,7 +211,10 @@ impl fmt::Debug for CertifiedPoSTBlockData {
         write!(
             f,
             "round: {}, stuck_block: {:?}, seen_blocks: {:?}, signatures: {} }}",
-            self.stuck_round, self.stuck_block, self.seen_blocks, self.signatures.len()
+            self.stuck_round,
+            self.stuck_block,
+            self.seen_blocks,
+            self.signatures.len()
         )
     }
 }
@@ -225,12 +228,13 @@ pub struct MVBAProposal {
 }
 
 impl MVBAProposal {
-    pub fn new(authority: AuthorityIndex, round: RoundNumber, proposal: MVBA, signer: &Signer) -> Self {
-        let signature = signer.sign_mvba_proposal(
-            authority,
-            round,
-            proposal,
-        );
+    pub fn new(
+        authority: AuthorityIndex,
+        round: RoundNumber,
+        proposal: MVBA,
+        signer: &Signer,
+    ) -> Self {
+        let signature = signer.sign_mvba_proposal(authority, round, proposal);
         Self {
             authority,
             round,
@@ -318,7 +322,7 @@ impl fmt::Debug for MVBAVote {
         write!(
             f,
             "MVBAVote {{ mvba_proposal: {:?}, voter: {} }}",
-            self.mvba_proposal, self.voter, 
+            self.mvba_proposal, self.voter,
         )
     }
 }
@@ -432,7 +436,11 @@ impl ACSOutput {
 
 impl fmt::Debug for ACSOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ACSOutput {{ round: {}, {:?} }}", self.round, self.blocks)
+        write!(
+            f,
+            "ACSOutput {{ round: {}, {:?} }}",
+            self.round, self.blocks
+        )
     }
 }
 

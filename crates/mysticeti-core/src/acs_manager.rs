@@ -101,18 +101,17 @@ impl ACSManager {
                     }
                     self.post_blocks.insert(authority, post_block);
                     tracing::debug!("Adding PoST block from authority {}", authority);
-                    let my_mvba = self.acs_fin.mvbas.entry(self.authority).or_insert_with(||CertifiedMVBA::new(self.authority, self.round, 0));
-                    if (my_mvba
-                        .proposal
-                        .count_ones() as u64)
+                    let my_mvba = self
+                        .acs_fin
+                        .mvbas
+                        .entry(self.authority)
+                        .or_insert_with(|| CertifiedMVBA::new(self.authority, self.round, 0));
+                    if (my_mvba.proposal.count_ones() as u64)
                         >= self.committee.acs_quorum_threshold()
                     {
                         // note that we don't change the input of the MVBA protocol
-                        let my_sign_for_mvba = signer.sign_mvba_proposal(
-                            self.authority,
-                            self.round,
-                            my_mvba.proposal,
-                        );
+                        let my_sign_for_mvba =
+                            signer.sign_mvba_proposal(self.authority, self.round, my_mvba.proposal);
                         my_mvba.update_signature(self.public_key.clone(), my_sign_for_mvba);
                         tracing::info!(
                             "MVBA reached quorum, adding my signature for MVBA proposal"
@@ -208,7 +207,11 @@ impl ACSManager {
         }
     }
 
-    pub fn handle_mvba_proposals(&mut self, mvba_proposals: Vec<MVBAProposal>, signer: &Signer) -> Vec<MVBAVote> {
+    pub fn handle_mvba_proposals(
+        &mut self,
+        mvba_proposals: Vec<MVBAProposal>,
+        signer: &Signer,
+    ) -> Vec<MVBAVote> {
         let mut return_votes = Vec::new();
         for proposal in mvba_proposals {
             if let Err(e) = proposal.verify(&self.committee) {

@@ -23,7 +23,8 @@ use tokio::{
 
 use crate::{
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
+        PoSTBlockVote,
     },
     config::NodePublicConfig,
     data::Data,

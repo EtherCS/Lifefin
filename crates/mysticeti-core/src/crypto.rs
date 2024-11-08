@@ -15,7 +15,8 @@ use zeroize::Zeroize;
 use crate::types::Vote;
 use crate::{
     acs_types::{
-        BinaryValue, CertifiedMVBA, FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData, PisaABAAux, PisaABABval, PoSTBlockVote, MVBA
+        BinaryValue, CertifiedMVBA, FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData,
+        PisaABAAux, PisaABABval, PoSTBlockVote, MVBA,
     },
     data::Data,
     serde::{ByteRepr, BytesVisitor},
@@ -332,7 +333,10 @@ impl PublicKey {
         self.0.verify(&signature, digest.as_ref())
     }
 
-    pub fn verify_mvba_proposal(&self, mvba_proposal: &MVBAProposal) -> Result<(), ed25519_consensus::Error> {
+    pub fn verify_mvba_proposal(
+        &self,
+        mvba_proposal: &MVBAProposal,
+    ) -> Result<(), ed25519_consensus::Error> {
         let signature = Signature::from(mvba_proposal.signature.0);
         let mut hasher = MVBAHasher::default();
         MVBADigest::digest_without_signature(

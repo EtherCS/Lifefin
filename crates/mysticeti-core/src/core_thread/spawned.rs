@@ -7,7 +7,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval, PoSTBlockVote
+        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
+        PoSTBlockVote,
     },
     block_handler::BlockHandler,
     data::Data,
