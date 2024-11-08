@@ -38,7 +38,7 @@ use crate::{
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock},
+    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock, Vote},
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 use tokio::runtime::Runtime;
@@ -273,10 +273,11 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer
             .utilization_timer("Core::add_post_blocks");
         for post_block in blocks {
-            self.acs_manager.add_post_block(post_block);
+            self.acs_manager.add_post_block(post_block, &self.signer);
         }
         // if we receive 2f+1 post blocks, we are ready to propose MVBA
         if self.acs_manager.ready_for_mvba() {
+            tracing::debug!("Collect enough post blocks for our MVBA");
             self.try_broadcast_mvba();
             // if we are not in fallback mode, switch to fallback mode
             if self.consensus_mode == ConsensusMode::Optimistic {
@@ -297,6 +298,7 @@ impl<H: BlockHandler> Core<H> {
             let rt = Runtime::new().unwrap();
             let peer = new_post_block.stuck_block.author();
             if peer == self.authority {
+                tracing::debug!("Generated post block in round {}", self.threshold_clock.get_round());
                 tracing::debug!("Broadcasting own post block {:?}", new_post_block);
                 // this is our post block
                 rt.block_on(
@@ -316,23 +318,36 @@ impl<H: BlockHandler> Core<H> {
 
     /// We broadcast own MVBA here
     fn try_broadcast_mvba(&mut self) {
-        let mvba = self.acs_manager.acs_fin.get_own_mvba().clone();
-        let rt = Runtime::new().unwrap();
-        // if we are certified, broadcast mvba
-        if mvba.is_certified(self.committee.acs_quorum_threshold()) {
-            rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(mvba)));
+        if let Some(mvba) = self.acs_manager.acs_fin.get_own_mvba() {
+            let rt = Runtime::new().unwrap();
+            // if we are certified, broadcast mvba
+            if mvba.is_certified(self.committee.acs_quorum_threshold()) {
+                rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(mvba)));
+            } else {
+                let mvba_proposal = MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal, &self.signer);
+                rt.block_on(self.broadcast(NetworkMessage::MVBAProposal(mvba_proposal)));
+            }
         } else {
-            let mvba_proposal = MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal);
-            let vote = MVBAVote::new_with_signer(
-                mvba_proposal.clone(),
-                self.authority,
-                self.signer.clone(),
-            );
-            rt.block_on(self.broadcast(NetworkMessage::MVBAVote(vote)));
+            tracing::error!("No MVBA to broadcast");
+        }
+        
+    }
+
+    /// Handle MVBA proposals here
+    pub fn add_mvba_proposals(&mut self, mvba_proposals: Vec<MVBAProposal>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::handle_mvba_proposals");
+        let return_votes = self.acs_manager.handle_mvba_proposals(mvba_proposals, &self.signer);
+        for vote in return_votes {
+            let rt = Runtime::new().unwrap();
+            tracing::debug!("Sending mvba vote to peer {}", vote.mvba_proposal.authority);
+            rt.block_on(self.send_peer(vote.mvba_proposal.authority, NetworkMessage::MVBAVote(vote)));
         }
     }
 
-    /// Handle MVBA proposal here
+    /// Handle MVBA votes here
     pub fn add_mvba_votes(&mut self, mvba_votes: Vec<MVBAVote>) {
         let _timer = self
             .metrics
@@ -342,22 +357,10 @@ impl<H: BlockHandler> Core<H> {
         // if we just received enough votes for a new mvba, broadcast it
         for new_mvba in new_mvbas {
             let rt = Runtime::new().unwrap();
-            let peer = new_mvba.authority;
             // note that we have enough signatures for our mvba at this point
-            if peer == self.authority {
-                tracing::debug!("Broadcasting own mvba {:?}", new_mvba);
-                // this is our mvba
-                rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(new_mvba.clone())));
-            } else {
-                // this is a mvba vote from other peer
-                let vote = MVBAVote::new_with_signer(
-                    new_mvba.get_mvba_proposal(),
-                    self.authority,
-                    self.signer.clone(),
-                );
-                tracing::debug!("Broadcasting mvba vote {:?}", vote);
-                rt.block_on(self.send_peer(peer, NetworkMessage::MVBAVote(vote)));
-            }
+            tracing::debug!("Broadcasting own mvba {:?}", new_mvba);
+            // this is our mvba
+            rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(new_mvba.clone())));
         }
     }
 

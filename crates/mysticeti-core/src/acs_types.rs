@@ -216,19 +216,26 @@ impl fmt::Debug for CertifiedPoSTBlockData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MVBAProposal {
     pub authority: AuthorityIndex, // the creator of this proposal
     pub round: RoundNumber,        // the last round agreed by the ACS mode
     pub proposal: MVBA,
+    pub signature: SignatureBytes, // signature of the creator
 }
 
 impl MVBAProposal {
-    pub fn new(authority: AuthorityIndex, round: RoundNumber, proposal: MVBA) -> Self {
+    pub fn new(authority: AuthorityIndex, round: RoundNumber, proposal: MVBA, signer: &Signer) -> Self {
+        let signature = signer.sign_mvba_proposal(
+            authority,
+            round,
+            proposal,
+        );
         Self {
             authority,
             round,
             proposal,
+            signature,
         }
     }
 
@@ -238,6 +245,27 @@ impl MVBAProposal {
 
     pub fn author(&self) -> AuthorityIndex {
         self.authority
+    }
+
+    pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
+        let pub_key = committee.get_public_key(self.authority);
+        let Some(pub_key) = pub_key else {
+            bail!("Unknown author {}", self.authority)
+        };
+        if let Err(e) = pub_key.verify_mvba_proposal(self) {
+            bail!("MVBA proposal signature verification has failed: {:?}", e);
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for MVBAProposal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MVBAProposal {{ authority: {}, round: {}, proposal: {} }}",
+            self.authority, self.round, self.proposal
+        )
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -251,7 +279,7 @@ impl MVBAVote {
     pub fn new_with_signer(
         mvba_proposal: MVBAProposal,
         voter: AuthorityIndex,
-        signer: Signer,
+        signer: &Signer,
     ) -> Self {
         let signature = signer.sign_mvba_proposal(
             mvba_proposal.authority,
@@ -276,10 +304,10 @@ impl MVBAVote {
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
         let pub_key = committee.get_public_key(self.mvba_voter());
         let Some(pub_key) = pub_key else {
-            bail!("Unknown pisa aba bval author {}", self.mvba_voter())
+            bail!("Unknown vote author {}", self.mvba_voter())
         };
         if let Err(e) = pub_key.verify_mvba_vote(self) {
-            bail!("pisa aba bval signature verification has failed: {:?}", e);
+            bail!("MVBA vote signature verification has failed: {:?}", e);
         }
         Ok(())
     }
@@ -323,8 +351,12 @@ impl CertifiedMVBA {
         self.signatures.len() >= acs_quorum as usize
     }
 
-    pub fn get_mvba_proposal(&self) -> MVBAProposal {
-        MVBAProposal::new(self.authority, self.round, self.proposal)
+    // pub fn get_mvba_proposal(&self) -> MVBAProposal {
+    //     MVBAProposal::new(self.authority, self.round, self.proposal)
+    // }
+
+    pub fn get_meta_digest(&self) -> MVBADigest {
+        MVBADigest::new(self.authority, self.round, self.proposal)
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -576,8 +608,8 @@ impl ACSFin {
         }
     }
 
-    pub fn get_own_mvba(&self) -> &CertifiedMVBA {
-        self.mvbas.get(&self.authority).unwrap()
+    pub fn get_own_mvba(&self) -> Option<CertifiedMVBA> {
+        self.mvbas.get(&self.authority).cloned()
     }
 
     /// first_propose_for_fin returns true iff there are exactly n-f certified mvbas

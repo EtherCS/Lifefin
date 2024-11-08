@@ -72,7 +72,7 @@ impl ACSManager {
         }
     }
 
-    pub fn add_post_block(&mut self, post_block: CertifiedPoSTBlockData) {
+    pub fn add_post_block(&mut self, post_block: CertifiedPoSTBlockData, signer: &Signer) {
         match post_block.stuck_round.cmp(&self.round) {
             // ignore a PoST block with a round less than or equal to the last ACS round
             Ordering::Less | Ordering::Equal => {}
@@ -100,26 +100,25 @@ impl ACSManager {
                         return;
                     }
                     self.post_blocks.insert(authority, post_block);
-                    if (self
-                        .acs_fin
-                        .mvbas
-                        .get(&self.authority)
-                        .unwrap()
+                    tracing::debug!("Adding PoST block from authority {}", authority);
+                    let my_mvba = self.acs_fin.mvbas.entry(self.authority).or_insert_with(||CertifiedMVBA::new(self.authority, self.round, 0));
+                    if (my_mvba
                         .proposal
                         .count_ones() as u64)
                         >= self.committee.acs_quorum_threshold()
                     {
                         // note that we don't change the input of the MVBA protocol
-                        tracing::info!(
-                            "MVBA already reached quorum, we don't change the mvba proposal"
+                        let my_sign_for_mvba = signer.sign_mvba_proposal(
+                            self.authority,
+                            self.round,
+                            my_mvba.proposal,
                         );
-                        // return;
+                        my_mvba.update_signature(self.public_key.clone(), my_sign_for_mvba);
+                        tracing::info!(
+                            "MVBA reached quorum, adding my signature for MVBA proposal"
+                        );
                     } else {
-                        self.acs_fin
-                            .mvbas
-                            .get_mut(&self.authority)
-                            .unwrap()
-                            .proposal |= 1 << authority;
+                        my_mvba.proposal |= 1 << authority;
                     }
                 }
             }
@@ -194,7 +193,7 @@ impl ACSManager {
                             "MVBA proposal from authority {} already received",
                             authority
                         );
-                        return true;
+                        return false;
                     } else {
                         // this is illegal meta post block
                         tracing::debug!("MVBA proposal from authority {} is illegal", authority);
@@ -207,6 +206,23 @@ impl ACSManager {
                 }
             }
         }
+    }
+
+    pub fn handle_mvba_proposals(&mut self, mvba_proposals: Vec<MVBAProposal>, signer: &Signer) -> Vec<MVBAVote> {
+        let mut return_votes = Vec::new();
+        for proposal in mvba_proposals {
+            if let Err(e) = proposal.verify(&self.committee) {
+                tracing::warn!("Rejected incorrect MVBA proposal {:?}: {:?}", proposal, e);
+                continue;
+            }
+            if self.add_mvba_proposal(proposal.clone()) {
+                let my_vote = MVBAVote::new_with_signer(proposal, self.authority, signer);
+                return_votes.push(my_vote);
+            } else {
+                tracing::debug!("We already received this MVBA proposal: {:?}", proposal);
+            }
+        }
+        return return_votes;
     }
 
     /// this function handle:
@@ -287,28 +303,26 @@ impl ACSManager {
         return_post_blocks
     }
 
-    /// this function handle:
-    /// 1) uncertified mvba for our block
-    /// 2) uncertified mvba from other peers
-    /// It returns: 1) own mvba with 2f+1 signatures, 2) a certified mvba used to create a mvba vote for other peers
-    pub fn add_mvba_votes(&mut self, uncertified_mvbas: Vec<MVBAVote>) -> Vec<CertifiedMVBA> {
+    /// this function handle votes for our uncertified mvba
+    /// It returns: own (certified) mvba with 2f+1 signatures
+    pub fn add_mvba_votes(&mut self, mvba_votes: Vec<MVBAVote>) -> Vec<CertifiedMVBA> {
         let mut return_mvbas = Vec::new();
-        for mvba in uncertified_mvbas {
-            if let Err(e) = mvba.verify(&self.committee) {
-                tracing::warn!("Rejected incorrect uncertified MVBA {:?}: {:?}", mvba, e);
+        for vote in mvba_votes {
+            if let Err(e) = vote.verify(&self.committee) {
+                tracing::warn!("Rejected incorrect MVBA vote {:?}: {:?}", vote, e);
                 continue;
             }
-            let mvba_author = mvba.mvba_creator();
-            let voter_public_key = self.committee.get_public_key(mvba.mvba_voter());
+            let vote_creator = vote.mvba_creator();
+            let voter_public_key = self.committee.get_public_key(vote.mvba_voter());
             let Some(voter_public_key) = voter_public_key else {
-                tracing::warn!("Unknown mvba vote author {}", mvba.mvba_voter());
+                tracing::warn!("Unknown mvba voter {}", vote.mvba_voter());
                 continue;
             };
-            if mvba_author == self.authority {
+            if vote_creator == self.authority {
                 // we handle mvba vote for ourself
                 if let Some(certified_mvba) = self.acs_fin.mvbas.get_mut(&self.authority) {
                     // check if the mvba vote is for our own mvba proposal
-                    if certified_mvba.get_mvba_proposal().digest() == mvba.mvba_proposal.digest() {
+                    if certified_mvba.get_meta_digest() == vote.mvba_proposal.digest() {
                         // if we already have enough signatures, ignore the vote to avoid different mvba
                         if certified_mvba.signatures.len()
                             >= self.committee.acs_quorum_threshold() as usize
@@ -316,7 +330,7 @@ impl ACSManager {
                             continue;
                         }
                         // add the signature to the mvba proposal
-                        certified_mvba.update_signature(voter_public_key.clone(), mvba.signature);
+                        certified_mvba.update_signature(voter_public_key.clone(), vote.signature);
                         if certified_mvba.signatures.len()
                             >= self.committee.acs_quorum_threshold() as usize
                         {
@@ -328,16 +342,7 @@ impl ACSManager {
                     }
                 }
             } else {
-                // we handle mvba from other peer
-                if self.add_mvba_proposal(mvba.mvba_proposal.clone()) {
-                    // this mvba proposal is valid
-                    let peer_mvba = CertifiedMVBA::new(
-                        mvba.mvba_proposal.authority,
-                        mvba.mvba_proposal.round,
-                        mvba.mvba_proposal.proposal,
-                    );
-                    return_mvbas.push(peer_mvba);
-                }
+                tracing::warn!("Receiving a mvba vote that is not for us");
             }
         }
         return_mvbas
