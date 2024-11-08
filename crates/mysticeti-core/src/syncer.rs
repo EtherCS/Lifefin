@@ -130,14 +130,22 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
     }
 
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {
-        if self.core.last_proposed() == round {
-            self.metrics.leader_timeout_total.inc();
-            self.force_new_block = true;
-            self.try_new_block();
-            true
-        } else {
-            false
+        match self.core.consensus_mode() {
+            ConsensusMode::Optimistic => {
+                if self.core.last_proposed() == round {
+                    self.metrics.leader_timeout_total.inc();
+                    self.force_new_block = true;
+                    self.try_new_block();
+                    true
+                } else {
+                    false
+                }
+            }
+            ConsensusMode::Fallback => {
+                false
+            }
         }
+        
     }
 
     fn try_new_block(&mut self) {

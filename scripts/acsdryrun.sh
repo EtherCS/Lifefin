@@ -21,5 +21,5 @@ tmux new -d -s "v1" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4
 tmux new -d -s "v2" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4 --authority 2 > v2.acs.log.ansi"
 tmux new -d -s "v3" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4 --authority 3 > v3.acs.log.ansi"
 
-sleep 5
+sleep 10
 tmux kill-server

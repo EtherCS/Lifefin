@@ -332,8 +332,8 @@ impl ACSManager {
                 if self.add_mvba_proposal(mvba.mvba_proposal.clone()) {
                     // this mvba proposal is valid
                     let peer_mvba = CertifiedMVBA::new(
-                        mvba.mvba_proposal.round,
                         mvba.mvba_proposal.authority,
+                        mvba.mvba_proposal.round,
                         mvba.mvba_proposal.proposal,
                     );
                     return_mvbas.push(peer_mvba);

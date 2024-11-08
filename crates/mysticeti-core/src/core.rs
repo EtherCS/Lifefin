@@ -355,6 +355,7 @@ impl<H: BlockHandler> Core<H> {
                     self.authority,
                     self.signer.clone(),
                 );
+                tracing::debug!("Broadcasting mvba vote {:?}", vote);
                 rt.block_on(self.send_peer(peer, NetworkMessage::MVBAVote(vote)));
             }
         }
@@ -639,6 +640,14 @@ impl<H: BlockHandler> Core<H> {
             self.epoch_changing(),
             &self.signer,
         );
+        self.last_seen_blocks
+                .entry(self.authority)
+                .and_modify(|last_seen_block| {
+                    if clock_round > last_seen_block.round {
+                        *last_seen_block = *block.reference();
+                    }
+                })
+                .or_insert(*block.reference());
         assert_eq!(
             block.includes().get(0).unwrap().authority,
             self.authority,
@@ -705,6 +714,11 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn try_commit(&mut self) -> Vec<Data<StatementBlock>> {
+        // todo: this is for test only:
+        if self.threshold_clock.get_round() == 10 {
+            self.switch_to_fallback();
+            return vec![];
+        }
         let start = Instant::now();
         let sequence: Vec<_> = self
             .committer

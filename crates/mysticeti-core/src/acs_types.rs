@@ -119,7 +119,7 @@ impl PoSTBlockVote {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CertifiedPoSTBlockData {
     pub stuck_round: RoundNumber,          // the round I am stuck at
     pub stuck_block: Data<StatementBlock>, // the block I proposed at the stuck round
@@ -205,6 +205,17 @@ impl CertifiedPoSTBlockData {
         Ok(())
     }
 }
+
+impl fmt::Debug for CertifiedPoSTBlockData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "round: {}, stuck_block: {:?}, seen_blocks: {:?}, signatures: {} }}",
+            self.stuck_round, self.stuck_block, self.seen_blocks, self.signatures.len()
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MVBAProposal {
     pub authority: AuthorityIndex, // the creator of this proposal
@@ -229,7 +240,7 @@ impl MVBAProposal {
         self.authority
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MVBAVote {
     pub mvba_proposal: MVBAProposal,
     pub voter: AuthorityIndex,     // the signer of this MVBAProposal
@@ -274,7 +285,17 @@ impl MVBAVote {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl fmt::Debug for MVBAVote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MVBAVote {{ mvba_proposal: {:?}, voter: {} }}",
+            self.mvba_proposal, self.voter, 
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CertifiedMVBA {
     pub authority: AuthorityIndex,
     pub round: RoundNumber, // the last round agreed by the ACS mode
@@ -322,6 +343,19 @@ impl CertifiedMVBA {
             }
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for CertifiedMVBA {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CertifiedMVBA {{ authority: {}, round: {}, proposal: {}, signatures: {} }}",
+            self.authority,
+            self.round,
+            self.proposal,
+            self.signatures.len()
+        )
     }
 }
 
@@ -392,7 +426,7 @@ impl FINMVBAView {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PisaABABval {
     pub view: FINMVBAView, // the aba round number
     pub est: BinaryValue,
@@ -439,7 +473,17 @@ impl PisaABABval {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl fmt::Debug for PisaABABval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "PisaABABval {{ view: {:?}, est: {}, maj: {}, authority: {}}}",
+            self.view, self.est, self.maj, self.authority,
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PisaABAAux {
     pub view: FINMVBAView, // the aba round number
     pub aux1: BinaryValue,
@@ -483,6 +527,16 @@ impl PisaABAAux {
             bail!("pisa aba aux signature verification has failed: {:?}", e);
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for PisaABAAux {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "PisaABAAux {{ view: {:?}, aux1: {}, aux2: {}, authority: {}}}",
+            self.view, self.aux1, self.aux2, self.authority,
+        )
     }
 }
 
