@@ -3,7 +3,11 @@
 
 # bash run.sh
 
-export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::acs_manager=DEBUG,mysticeti_core::acs_types=DEBUG
+export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,
+
+# for acs debug
+# export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::acs_manager=DEBUG,mysticeti_core::acs_types=DEBUG,mysticeti_core::synchronizer=DEBUG,mysticeti_core::block_store=DEBUG
+#export RUST_LOG=debug
 
 # Change to the previous directory
 cd ..
@@ -16,10 +20,18 @@ cd -
 
 tmux kill-server || true
 
-tmux new -d -s "v0" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4 --authority 0 > v0.acs.log.ansi"
-tmux new -d -s "v1" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4 --authority 1 > v1.acs.log.ansi"
-tmux new -d -s "v2" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4 --authority 2 > v2.acs.log.ansi"
-tmux new -d -s "v3" "cargo run --bin mysticeti -- dry-acs-run --committee-size 4 --authority 3 > v3.acs.log.ansi"
+# Remove all v*.acs.log.ansi files
+rm -f v*.acs.log.ansi
 
-sleep 10
+# Number of nodes
+num_nodes=${1}
+stuck_round=${2}
+run_time=${3}
+
+# Loop to create and run nodes
+for i in $(seq 0 $((num_nodes - 1))); do
+    tmux new -d -s "v$i" "cargo run --bin mysticeti -- dry-acs-run --stuck-round $stuck_round --committee-size $num_nodes --authority $i > v$i.acs.log.ansi"
+done
+
+sleep $run_time
 tmux kill-server

@@ -76,6 +76,9 @@ enum Operation {
         /// The number of authorities in the committee.
         #[clap(long, value_name = "INT")]
         committee_size: usize,
+        /// (for test) The round number when triggering ACS.
+        #[clap(long, value_name = "INT")]
+        stuck_round: u64,
     },
     /// Deploy a local validator for attack test. DryAttackrun mode uses default keys and committee configurations.
     DryAttackRun {
@@ -130,7 +133,8 @@ async fn main() -> Result<()> {
         Operation::DryACSRun {
             authority,
             committee_size,
-        } => dryacsrun(authority, committee_size).await?,
+            stuck_round,
+        } => dryacsrun(authority, committee_size, stuck_round).await?,
         Operation::DryAttackRun {
             attack_type,
             authority,
@@ -242,6 +246,7 @@ async fn run(
         public_config.clone(),
         private_config,
         client_parameters,
+        None,
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;
@@ -289,6 +294,7 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
         public_config,
         private_config,
         client_parameters,
+        None,
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;
@@ -297,7 +303,7 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
     Ok(())
 }
 
-async fn dryacsrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> {
+async fn dryacsrun(authority: AuthorityIndex, committee_size: usize, stuck_round: u64) -> Result<()> {
     tracing::warn!(
         "Starting validator {authority} in dryacsrun mode (committee size: {committee_size})"
     );
@@ -337,6 +343,7 @@ async fn dryacsrun(authority: AuthorityIndex, committee_size: usize) -> Result<(
         public_config,
         private_config,
         client_parameters,
+        Some(stuck_round),
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;
@@ -396,6 +403,7 @@ async fn dryattackrun(
         public_config,
         private_config,
         client_parameters,
+        None,
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;

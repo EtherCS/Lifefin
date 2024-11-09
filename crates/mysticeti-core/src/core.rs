@@ -65,15 +65,14 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
-    // Here are our defined structures for ACS mode
+    /* Here are our defined structures for ACS mode */ 
     consensus_mode: ConsensusMode,
-    // todo: Arc is unnecessary for ACSManager
-    // acs_manager: Arc<RwLock<ACSManager>>,
     acs_manager: ACSManager,
     last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     acs_timeout: Duration,
     last_commit_time: Instant,
     last_acs_output: ACSOutput,
+    acs_trigger_round: u64, // (test only): nodes enter ACS mode at this round
     pub network_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
 }
 
@@ -99,7 +98,10 @@ impl<H: BlockHandler> Core<H> {
         recovered: RecoveredState,
         mut wal_writer: WalWriter,
         options: CoreOptions,
+        acs_trigger_round: Option<u64>,
     ) -> Self {
+        let acs_trigger_round = acs_trigger_round.unwrap_or(0); // Provide a default value of 0
+
         let RecoveredState {
             block_store,
             last_own_block,
@@ -198,6 +200,7 @@ impl<H: BlockHandler> Core<H> {
             acs_timeout: public_config.parameters.acs_timeout,
             last_commit_time: Instant::now(),
             last_acs_output: ACSOutput::new(0, vec![]),
+            acs_trigger_round,
             network_connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
@@ -526,7 +529,7 @@ impl<H: BlockHandler> Core<H> {
             // we are able to decide and complish the ACS process
             if mvba == 0 {
                 // this means that we haven't received the mvba
-                let decided_mvba_from = self.acs_manager.acs_fin.current_election();
+                let _decided_mvba_from = self.acs_manager.acs_fin.current_election();
                 // todo: send request to other peers to get the decided mvba
             } else {
                 // we need to collect all indexes such that the i-th index of mvba is 1
@@ -605,15 +608,21 @@ impl<H: BlockHandler> Core<H> {
         self.consensus_mode = ConsensusMode::Fallback;
     }
 
+    pub fn switch_to_optimistic(&mut self) {
+        tracing::info!("Switching to Optimistic mode");
+        self.consensus_mode = ConsensusMode::Optimistic;
+    }
+
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
         // todo: commit all history blocks based on acs_output
         let new_leader_block = acs_output.new_leader(&self.committer);
         tracing::debug!("Committing ACS output {:?}", acs_output);
         tracing::debug!("New leader block {:?}", new_leader_block);
         self.last_acs_output = acs_output.clone();
-        self.try_new_block_after_acs();
+        // self.try_new_block_after_acs();
+        self.add_blocks_after_acs(acs_output.blocks.clone());
         self.acs_manager.reset(acs_output.round);
-        self.consensus_mode = ConsensusMode::Optimistic;
+        // self.consensus_mode = ConsensusMode::Optimistic;
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -634,76 +643,37 @@ impl<H: BlockHandler> Core<H> {
             .push_back((position, MetaStatement::Payload(statements)));
     }
 
-    pub fn try_new_block_after_acs(&mut self) {
+    /// In this function, we set up our state with acs_output for seamless transition
+    pub fn add_blocks_after_acs(&mut self, blocks: Vec<Data<StatementBlock>>) -> Vec<Data<StatementBlock>> {
         let _timer = self
             .metrics
             .utilization_timer
-            .utilization_timer("Core::try_new_block_after_acs");
-        let clock_round = self.last_acs_output.round + 2;
-        let mut includes = vec![];
-        let statements = vec![];
-        for statement_block in self.last_acs_output.blocks.iter() {
-            includes.push(*statement_block.reference());
+            .utilization_timer("Core::add_blocks_after_acs");
+        // todo: we need to think about when acs_output contains lower round blocks, e.g., [A10, B10, C7]
+        // in this case, our protocol should be able to work properly
+        let processed = self
+            .block_manager
+            .add_blocks(blocks, &mut (&mut self.wal_writer, &self.block_store));
+        let mut result = Vec::with_capacity(processed.len());
+        for (position, processed) in processed.into_iter() {
+            // update last seen block, used for ACS consensus mode
+            let author = processed.author();
+            self.last_seen_blocks
+                .entry(author)
+                .and_modify(|last_seen_block| {
+                    if processed.reference().round >= last_seen_block.round {
+                        *last_seen_block = *processed.reference();
+                    }
+                })
+                .or_insert(*processed.reference());
+            self.threshold_clock
+                .add_block(*processed.reference(), &self.committee);
+            self.pending
+                .push_back((position, MetaStatement::Include(*processed.reference())));
+            result.push(processed);
         }
-        assert!(!includes.is_empty());
-        let time_ns = timestamp_utc().as_nanos();
-        let block = StatementBlock::new_with_signer(
-            self.authority,
-            clock_round,
-            includes,
-            statements,
-            time_ns,
-            self.epoch_changing(),
-            &self.signer,
-        );
-
-        tracing::debug!("creating block {block:?}");
-
-        // self.last_seen_blocks
-        //     .entry(self.authority)
-        //     .and_modify(|last_seen_block| {
-        //         if clock_round > last_seen_block.round {
-        //             *last_seen_block = *block.reference();
-        //         }
-        //     })
-        //     .or_insert(*block.reference());
-        // assert_eq!(
-        //     block.includes().get(0).unwrap().authority,
-        //     self.authority,
-        //     "Invalid block {}",
-        //     block
-        // );
-
-        // let block = Data::new(block);
-        // if block.serialized_bytes().len() > crate::wal::MAX_ENTRY_SIZE / 2 {
-        //     // Sanity check for now
-        //     panic!(
-        //         "Created an oversized block (check all limits set properly: {} > {}): {:?}",
-        //         block.serialized_bytes().len(),
-        //         crate::wal::MAX_ENTRY_SIZE / 2,
-        //         block.detailed()
-        //     );
-        // }
-        // self.threshold_clock
-        //     .add_block(*block.reference(), &self.committee);
-        // self.block_handler.handle_proposal(&block);
-        // self.proposed_block_stats(&block);
-        // let next_entry = if let Some((pos, _)) = self.pending.get(0) {
-        //     *pos
-        // } else {
-        //     WalPosition::MAX
-        // };
-        // self.last_own_block = OwnBlockData {
-        //     next_entry,
-        //     block: block.clone(),
-        // };
-        // (&mut self.wal_writer, &self.block_store).insert_own_block(&self.last_own_block);
-
-        // if self.options.fsync {
-        //     self.wal_writer.sync().expect("Wal sync failed");
-        // }
-
-        tracing::debug!("After ACS, created block {block:?}");
+        self.run_block_handler(&result);
+        result
     }
 
     pub fn try_new_block(&mut self) -> Option<Data<StatementBlock>> {
@@ -844,8 +814,8 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn try_commit(&mut self) -> Vec<Data<StatementBlock>> {
-        // todo: this is for test only:
-        if self.threshold_clock.get_round() == 10 {
+        // ACS test: this is for acs test only:
+        if self.threshold_clock.get_round() == self.acs_trigger_round {
             self.switch_to_fallback();
             return vec![];
         }
