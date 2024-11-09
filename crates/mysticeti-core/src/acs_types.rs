@@ -665,9 +665,13 @@ impl ACSFin {
         match mvba.round.cmp(&self.last_acs_round) {
             // ignore a mvba with a round equal to the last ACS round
             Ordering::Less => {
-                tracing::debug!("Received a mvba with a round {} smaller than the last ACS round {}", mvba.round, self.last_acs_round);
+                tracing::debug!(
+                    "Received a mvba with a round {} smaller than the last ACS round {}",
+                    mvba.round,
+                    self.last_acs_round
+                );
                 false
-            }            
+            }
             // todo: may need to handle a future certified mvba
             Ordering::Greater => {
                 tracing::warn!("Received a mvba with a round larger than the last ACS round");
@@ -775,11 +779,11 @@ impl ACSFin {
                         }
                     } else {
                         let est = bval.est;
-                        let raba_bvals = self.raba_bvals.entry(bval.view.clone()).or_insert(Vec::new());
-                        let est_count = raba_bvals
-                            .iter()
-                            .filter(|&b| b.est == est)
-                            .count();
+                        let raba_bvals = self
+                            .raba_bvals
+                            .entry(bval.view.clone())
+                            .or_insert(Vec::new());
+                        let est_count = raba_bvals.iter().filter(|&b| b.est == est).count();
                         // receive f+1 PisaABABval with the same est value
                         if est_count >= self.committee.acs_validity_threshold() as usize {
                             tracing::debug!(
@@ -825,14 +829,8 @@ impl ACSFin {
                 }
                 Ordering::Greater => {
                     // we will buffer the future pisa aba aux
-                    let raba_aux = self
-                        .raba_aux
-                        .entry(aux.view.clone())
-                        .or_insert(Vec::new());
-                    if raba_aux
-                        .iter()
-                        .any(|b| b.digest() == aux.digest())
-                    {
+                    let raba_aux = self.raba_aux.entry(aux.view.clone()).or_insert(Vec::new());
+                    if raba_aux.iter().any(|b| b.digest() == aux.digest()) {
                         tracing::debug!(
                             "Already received this pisa aba aux from {}: {:?}",
                             aux.author(),
@@ -843,10 +841,6 @@ impl ACSFin {
                     raba_aux.push(aux.clone());
                 }
                 Ordering::Equal => {
-                    // let raba_aux = self
-                    //     .raba_aux
-                    //     .entry(aux.view.clone())
-                    //     .or_insert(Vec::new());
                     if self
                         .raba_aux
                         .entry(aux.view.clone())
@@ -861,50 +855,55 @@ impl ACSFin {
                         );
                         continue;
                     }
-                    // check if we accept this aux
-                    let mut bin_values = self.get_binary_values_in_view(aux.view.clone());
-                    bin_values.push(2);
-                    if !bin_values.contains(&aux.aux1) || !bin_values.contains(&aux.aux2) {
-                        tracing::warn!("Invalid pisa aba aux from {}: {:?}", aux.author(), aux);
-                        continue;
-                    }
-                    if aux.aux1 + aux.aux2 == 1 || aux.aux2 == 2 {
-                        tracing::warn!("Invalid pisa aba aux from {}: {:?}", aux.author(), aux);
-                        continue;
-                    }
-                    self.raba_aux.entry(aux.view.clone()).or_insert(Vec::new()).push(aux.clone());
+                    self.raba_aux
+                        .entry(aux.view.clone())
+                        .or_insert(Vec::new())
+                        .push(aux.clone());
                 }
             }
         }
 
-        // discard invalid aux if delta_b is 1
-        if self.delta_b(0) == 1 {
-            // discard all aux with aux1 = 1
-            self.raba_aux
-                .entry(self.mvba_view.clone())
-                .or_insert(Vec::new())
-                .retain(|aux| aux.aux1 != 1);
-        } else if self.delta_b(1) == 1 {
-            // discard all aux with aux1 = 0
-            self.raba_aux
-                .entry(self.mvba_view.clone())
-                .or_insert(Vec::new())
-                .retain(|aux| aux.aux1 != 0);
-        }
+        // todo: discard invalid aux 
+        // if self.delta_b(0) == 1 {
+        //     // discard all aux with aux1 = 1
+        //     self.raba_aux
+        //         .entry(self.mvba_view.clone())
+        //         .or_insert(Vec::new())
+        //         .retain(|aux| aux.aux1 != 1);
+        // } else if self.delta_b(1) == 1 {
+        //     // discard all aux with aux1 = 0
+        //     self.raba_aux
+        //         .entry(self.mvba_view.clone())
+        //         .or_insert(Vec::new())
+        //         .retain(|aux| aux.aux1 != 0);
+        // }
+
         // if we have n-f PisaABAAux, then we can enter the agreement phase
-        if self.raba_aux.entry(self.mvba_view.clone()).or_insert(Vec::new()).len()
+        if self
+            .raba_aux
+            .entry(self.mvba_view.clone())
+            .or_insert(Vec::new())
+            .len()
             >= self.committee.acs_quorum_threshold() as usize
         {
+            tracing::debug!(
+                "Received {} (n-f) PisaABAAux, we can enter the agreement phase",
+                self.raba_aux
+                    .entry(self.mvba_view.clone())
+                    .or_insert(Vec::new())
+                    .len()
+            );
             if self.mvba_view.aba_round == 0 {
                 if let Some(decided_authority) = self.try_decide_in_round_0() {
                     // if we can decide, then we can commit the ACS
                     if let Some(mvba) = self.mvbas.get(&decided_authority) {
                         return Some(mvba.proposal);
                     } else {
-                        tracing::warn!(
+                        tracing::debug!(
                             "We should decide but cannot find the mvba from the decided authority {}",
                             decided_authority
                         );
+                        tracing::debug!("mvbas {:?}", self.mvbas);
                         // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
                         return Some(0);
                     }
@@ -950,7 +949,7 @@ impl ACSFin {
             }
         }
         if decided_value == 1 {
-            tracing::info!("RABA decide {} in view {:?}", 1, self.mvba_view);
+            tracing::debug!("RABA decide {} in view {:?}", 1, self.mvba_view);
             return Some(self.election(self.mvba_view.mvba_round));
         } else {
             // unfortunately, we cannot decide, enter next aba round
@@ -980,7 +979,7 @@ impl ACSFin {
                 next_est = new_b;
                 next_maj = new_b;
                 if current_coin == new_b {
-                    tracing::info!("RABA decide {} in view {:?}", new_b, self.mvba_view);
+                    tracing::debug!("RABA decide {} in view {:?}", new_b, self.mvba_view);
                     decided_value = new_b;
                 }
             }
@@ -995,7 +994,7 @@ impl ACSFin {
                     next_est = new_b;
                     next_maj = new_b;
                     if current_coin == new_b && last_coin == new_b {
-                        tracing::info!("RABA decide {} in view {:?}", new_b, self.mvba_view);
+                        tracing::debug!("RABA decide {} in view {:?}", new_b, self.mvba_view);
                         decided_value = new_b;
                     }
                 } else if avals.contains(&new_b) && new_b == last_coin {
@@ -1147,20 +1146,14 @@ impl ACSFin {
             return bvals.into_iter().collect();
         }
         // we can only do this when we have n-f PisaABAAux in the view
-        if self.raba_aux.entry(view.clone()).or_insert(Vec::new()).len() < self.committee.acs_quorum_threshold() as usize
-        {
-            tracing::warn!("Fail to get binary values: Not enough PisaABAAux in the view");
-            return bvals.into_iter().collect();
-        }
+        // if self.raba_aux.entry(view.clone()).or_insert(Vec::new()).len() < self.committee.acs_quorum_threshold() as usize
+        // {
+        //     tracing::warn!("Fail to get binary values: Not enough PisaABAAux in the view");
+        //     return bvals.into_iter().collect();
+        // }
         let raba_bvals = self.raba_bvals.entry(view.clone()).or_insert(Vec::new());
-        let bval_with_zero = raba_bvals
-            .iter()
-            .filter(|&bval| bval.est == 0)
-            .count();
-        let bval_with_one = raba_bvals
-            .iter()
-            .filter(|&bval| bval.est == 1)
-            .count();
+        let bval_with_zero = raba_bvals.iter().filter(|&bval| bval.est == 0).count();
+        let bval_with_one = raba_bvals.iter().filter(|&bval| bval.est == 1).count();
         if view.aba_round == 0 {
             if let Some(raba_bvals) = self.raba_bvals.get(&view) {
                 // if our own bval.est = 1 or we receive a bval.est = 1, then we add it to the bin_values
@@ -1190,14 +1183,8 @@ impl ACSFin {
         }
         // we can only do this when we have n-f PisaABABval with est=0 (or est=1) in the view
         let raba_bvals = self.raba_bvals.entry(view.clone()).or_insert(Vec::new());
-        let bval_with_zero = raba_bvals
-            .iter()
-            .filter(|&bval| bval.est == 0)
-            .count();
-        let bval_with_one = raba_bvals
-            .iter()
-            .filter(|&bval| bval.est == 1)
-            .count();
+        let bval_with_zero = raba_bvals.iter().filter(|&bval| bval.est == 0).count();
+        let bval_with_one = raba_bvals.iter().filter(|&bval| bval.est == 1).count();
         if bval_with_zero < (self.committee.acs_quorum_threshold() as usize)
             && bval_with_one < (self.committee.acs_quorum_threshold() as usize)
         {
@@ -1367,7 +1354,7 @@ impl ACSFin {
     pub fn delta_b(&mut self, est: BinaryValue) -> BinaryValue {
         let mut delta_b = 2;
         // we are not ready to set delta_b for this view
-        
+
         if self
             .raba_bvals
             .entry(self.mvba_view.clone())
