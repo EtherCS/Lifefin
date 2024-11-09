@@ -320,6 +320,7 @@ impl StatementBlock {
                 BaseStatement::VoteRange(range) => range.verify()?,
             }
         }
+        // todo - this should be done for both optimistic and fallback consensus modes
         ensure!(
             threshold_clock_valid_non_genesis(self, committee),
             "Threshold clock is not valid"

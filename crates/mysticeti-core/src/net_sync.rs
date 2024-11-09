@@ -19,7 +19,7 @@ use tokio::{
 use crate::{
     block_handler::BlockHandler,
     block_store::BlockStore,
-    committee::Committee,
+    // committee::Committee,
     config::NodePublicConfig,
     core::Core,
     core_thread::CoreThreadDispatcher,
@@ -46,7 +46,7 @@ pub struct NetworkSyncerInner<H: BlockHandler, C: CommitObserver> {
     pub syncer: CoreThreadDispatcher<H, Arc<Notify>, C>,
     pub block_store: BlockStore,
     pub notify: Arc<Notify>,
-    committee: Arc<Committee>,
+    // committee: Arc<Committee>,
     stop: mpsc::Sender<()>,
     epoch_close_signal: mpsc::Sender<()>,
     pub epoch_closing_time: Arc<AtomicU64>,
@@ -68,7 +68,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         // todo - ugly, probably need to merge syncer and core
         let (committed, state) = core.take_recovered_committed_blocks();
         commit_observer.recover_committed(committed, state);
-        let committee = core.committee().clone();
+        // let committee = core.committee().clone();
         let wal_syncer = core.wal_syncer();
         let block_store = core.block_store().clone();
         let epoch_closing_time = core.epoch_closing_time();
@@ -91,7 +91,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             notify,
             syncer,
             block_store,
-            committee,
+            // committee,
             stop: stop_sender.clone(),
             epoch_close_signal: epoch_sender.clone(),
             epoch_closing_time,
@@ -273,16 +273,17 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
-                    if let Err(e) = block.verify(&inner.committee) {
-                        tracing::warn!(
-                            "Rejected incorrect block {} from {}: {:?}",
-                            block.reference(),
-                            peer,
-                            e
-                        );
-                        // Terminate connection upon receiving incorrect block.
-                        break;
-                    }
+                    // note: we move the block verification to the syncer
+                    // if let Err(e) = block.verify(&inner.committee) {
+                    //     tracing::warn!(
+                    //         "Rejected incorrect block {} from {}: {:?}",
+                    //         block.reference(),
+                    //         peer,
+                    //         e
+                    //     );
+                    //     // Terminate connection upon receiving incorrect block.
+                    //     break;
+                    // }
                     inner.syncer.add_blocks(vec![block]).await;
                 }
                 NetworkMessage::RequestBlocks(references) => {

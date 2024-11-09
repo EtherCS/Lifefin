@@ -75,7 +75,15 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
         // add normal blocks only when we are in the optimistic mode
         match self.core.consensus_mode() {
             ConsensusMode::Optimistic => {
-                self.core.add_blocks(blocks);
+                let mut filter_blocks = vec![];
+                for block in blocks {
+                    if let Err(e) = block.verify(&self.core.committee()) {
+                        tracing::warn!("Rejected incorrect block: {:?}", e);
+                    } else {
+                        filter_blocks.push(block);
+                    }
+                }
+                self.core.add_blocks(filter_blocks);
                 self.try_new_block();
             }
             ConsensusMode::Fallback => {
@@ -152,7 +160,17 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
                     false
                 }
             }
-            ConsensusMode::Fallback => false,
+            ConsensusMode::Fallback => {
+                if self.core.last_proposed() == round {
+                    self.metrics.leader_timeout_total.inc();
+                    self.force_new_block = true;
+                    self.try_new_block();
+                    self.core.switch_to_optimistic();
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
