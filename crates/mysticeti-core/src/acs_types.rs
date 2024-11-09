@@ -664,7 +664,10 @@ impl ACSFin {
     pub fn add_certified_mvba(&mut self, mvba: CertifiedMVBA) -> bool {
         match mvba.round.cmp(&self.last_acs_round) {
             // ignore a mvba with a round equal to the last ACS round
-            Ordering::Less => false,
+            Ordering::Less => {
+                tracing::debug!("Received a mvba with a round {} smaller than the last ACS round {}", mvba.round, self.last_acs_round);
+                false
+            }            
             // todo: may need to handle a future certified mvba
             Ordering::Greater => {
                 tracing::warn!("Received a mvba with a round larger than the last ACS round");
@@ -681,6 +684,7 @@ impl ACSFin {
                         tracing::debug!("Already received a mvba from {}: {:?}", authority, mvba);
                         return false;
                     }
+                    tracing::debug!("Add a mvba from {}: {:?}", authority, mvba);
                     self.mvbas.insert(authority, mvba);
                     return true;
                 }
@@ -706,13 +710,11 @@ impl ACSFin {
                 }
                 Ordering::Greater => {
                     // we will buffer the future pisa aba bval
-                    if self
+                    let raba_bvals = self
                         .raba_bvals
-                        .get(&bval.view)
-                        .unwrap()
-                        .iter()
-                        .any(|b| b.digest() == bval.digest())
-                    {
+                        .entry(bval.view.clone())
+                        .or_insert(Vec::new());
+                    if raba_bvals.iter().any(|b| b.digest() == bval.digest()) {
                         tracing::debug!(
                             "Already received this pisa aba bval from {}: {:?}",
                             bval.author(),
@@ -720,19 +722,14 @@ impl ACSFin {
                         );
                         continue;
                     }
-                    self.raba_bvals
-                        .entry(bval.view.clone())
-                        .or_insert(Vec::new())
-                        .push(bval.clone());
+                    raba_bvals.push(bval.clone());
                 }
                 Ordering::Equal => {
-                    if self
+                    let raba_bvals = self
                         .raba_bvals
-                        .get(&bval.view)
-                        .unwrap()
-                        .iter()
-                        .any(|b| b.digest() == bval.digest())
-                    {
+                        .entry(bval.view.clone())
+                        .or_insert(Vec::new());
+                    if raba_bvals.iter().any(|b| b.digest() == bval.digest()) {
                         tracing::debug!(
                             "Already received a pisa aba bval from {}: {:?}",
                             bval.author(),
@@ -740,34 +737,29 @@ impl ACSFin {
                         );
                         continue;
                     }
-                    self.raba_bvals
-                        .entry(bval.view.clone())
-                        .or_insert(Vec::new())
-                        .push(bval.clone());
+                    raba_bvals.push(bval.clone());
+                    tracing::debug!("Add a pisa aba bval {:?} to the view {:?}", bval, bval.view);
                     // we handle the pisa aba bval differently if we are in the 0-th aba round
                     if self.mvba_view.aba_round == 0 {
+                        tracing::debug!("Handling pisa aba bval {:?} in the 0-th aba round", bval);
                         if bval.authority == self.authority {
                             let return_aux =
                                 PisaABAAux::new(bval.view.clone(), 1, 1, self.authority, signer);
                             return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                         } else {
                             let est = bval.est;
-                            let est_count = self
-                                .raba_bvals
-                                .get(&bval.view)
-                                .unwrap()
-                                .iter()
-                                .filter(|&b| b.est == est)
-                                .count();
+                            let est_count = raba_bvals.iter().filter(|&b| b.est == est).count();
                             if est_count >= self.committee.acs_validity_threshold() as usize {
                                 // if we haven't send this bval, then do it
                                 if let Some(return_bval) = self.create_bval(bval.clone(), signer) {
+                                    tracing::debug!("Receive {} (f+1) bval, We havent sent this PisaABABval: {:?}, now do it", est_count, return_bval.clone());
                                     return_messages.push(PisaABAMessage::PisaABABval(return_bval));
                                 }
                                 if est == 1 {
                                     if let Some(return_aux) =
                                         self.create_aux_with_inputs(bval.view.clone(), 1, 1, signer)
                                     {
+                                        tracing::debug!("Receive {} (f+1) bval, We havent sent this PisaABAAux: {:?}, now do it", est_count, return_aux.clone());
                                         return_messages
                                             .push(PisaABAMessage::PisaABAAux(return_aux));
                                     }
@@ -777,6 +769,7 @@ impl ACSFin {
                                 if let Some(return_aux) =
                                     self.create_aux_with_inputs(bval.view.clone(), est, est, signer)
                                 {
+                                    tracing::debug!("Receive {} (2f+1) bval, We havent sent this PisaABAAux: {:?}, now do it", est_count, return_aux.clone());
                                     return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                                 }
                             }
@@ -792,14 +785,26 @@ impl ACSFin {
                             .count();
                         // receive f+1 PisaABABval with the same est value
                         if est_count >= self.committee.acs_validity_threshold() as usize {
+                            tracing::debug!(
+                                "Received f+1 ({}) PisaABABval with the same est value {}",
+                                est_count,
+                                est
+                            );
                             // if we haven't send this bval, then do it
                             if let Some(return_bval) = self.create_bval(bval.clone(), signer) {
+                                tracing::debug!("Sending our PisaABABval: {:?}", return_bval);
                                 return_messages.push(PisaABAMessage::PisaABABval(return_bval));
                             }
                         }
                         // receive n-f PisaABABval with the same est value, enter the agreement phase
                         if est_count >= self.committee.acs_quorum_threshold() as usize {
+                            tracing::debug!(
+                                "Received n-f ({}) PisaABABval with the same est value {}",
+                                est_count,
+                                est
+                            );
                             if let Some(return_aux) = self.create_aux(bval.clone(), signer) {
+                                tracing::debug!("Sending our PisaABAAux: {:?}", return_aux);
                                 return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                             }
                         }
@@ -1046,20 +1051,16 @@ impl ACSFin {
     }
 
     fn create_aux(&mut self, bval: PisaABABval, signer: &Signer) -> Option<PisaABAAux> {
+        tracing::debug!("Creating a aux with the bval: {:?}", bval);
         let est = bval.est;
         let est_cap = (est + 1) % 2;
         let delta_b = self.delta_b(est);
+        let view_raba_aux = self.raba_aux.entry(bval.view.clone()).or_insert(Vec::new());
         // if we haven't broadcast aux message, then do it
-        if !self
-            .raba_aux
-            .get(&bval.view)
-            .unwrap()
+        if !view_raba_aux
             .iter()
             .any(|aux| aux.authority == self.authority && aux.aux1 == est)
-            || !self
-                .raba_aux
-                .get(&bval.view)
-                .unwrap()
+            || !view_raba_aux
                 .iter()
                 .any(|aux| aux.authority == self.authority && aux.aux1 == est_cap)
         {
@@ -1067,18 +1068,12 @@ impl ACSFin {
                 let return_aux =
                     PisaABAAux::new(bval.view.clone(), est, est, self.authority, signer);
                 // add own aux to the view
-                self.raba_aux
-                    .entry(bval.view.clone())
-                    .or_insert(Vec::new())
-                    .push(return_aux.clone());
+                view_raba_aux.push(return_aux.clone());
                 return Some(return_aux);
             } else {
                 let return_aux = PisaABAAux::new(bval.view.clone(), 2, est, self.authority, signer);
                 // add own aux to the view
-                self.raba_aux
-                    .entry(bval.view.clone())
-                    .or_insert(Vec::new())
-                    .push(return_aux.clone());
+                view_raba_aux.push(return_aux.clone());
                 return Some(return_aux);
             }
         }
@@ -1092,18 +1087,13 @@ impl ACSFin {
         aux2: BinaryValue,
         signer: &Signer,
     ) -> Option<PisaABAAux> {
-        if !self
-            .raba_aux
-            .get(&view)
-            .unwrap()
+        let view_raba_aux = self.raba_aux.entry(view.clone()).or_insert(Vec::new());
+        if !view_raba_aux
             .iter()
             .any(|aux| aux.authority == self.authority && aux.aux1 == aux1 && aux.aux2 == aux2)
         {
             let new_aux = PisaABAAux::new(view.clone(), aux1, aux2, self.authority, signer);
-            self.raba_aux
-                .entry(view.clone())
-                .or_insert(Vec::new())
-                .push(new_aux.clone());
+            view_raba_aux.push(new_aux.clone());
             return Some(new_aux);
         }
         None
@@ -1111,10 +1101,11 @@ impl ACSFin {
 
     fn create_bval(&mut self, bval: PisaABABval, signer: &Signer) -> Option<PisaABABval> {
         let est = bval.est;
-        if !self
+        let view_raba_bval = self
             .raba_bvals
-            .get(&bval.view)
-            .unwrap()
+            .entry(bval.view.clone())
+            .or_insert(Vec::new());
+        if !view_raba_bval
             .iter()
             .any(|b| b.authority == self.authority && b.est == est)
         {
@@ -1125,10 +1116,7 @@ impl ACSFin {
                 self.authority,
                 signer,
             );
-            self.raba_bvals
-                .entry(bval.view.clone())
-                .or_insert(Vec::new())
-                .push(new_bval.clone());
+            view_raba_bval.push(new_bval.clone());
             return Some(new_bval);
         }
         None

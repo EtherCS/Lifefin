@@ -38,7 +38,9 @@ use crate::{
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock, Vote},
+    types::{
+        AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock,
+    },
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 use tokio::runtime::Runtime;
@@ -298,7 +300,10 @@ impl<H: BlockHandler> Core<H> {
             let rt = Runtime::new().unwrap();
             let peer = new_post_block.stuck_block.author();
             if peer == self.authority {
-                tracing::debug!("Generated post block in round {}", self.threshold_clock.get_round());
+                tracing::debug!(
+                    "Generated post block in round {}",
+                    self.threshold_clock.get_round()
+                );
                 tracing::debug!("Broadcasting own post block {:?}", new_post_block);
                 // this is our post block
                 rt.block_on(
@@ -324,13 +329,13 @@ impl<H: BlockHandler> Core<H> {
             if mvba.is_certified(self.committee.acs_quorum_threshold()) {
                 rt.block_on(self.broadcast(NetworkMessage::CertifiedMVBA(mvba)));
             } else {
-                let mvba_proposal = MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal, &self.signer);
+                let mvba_proposal =
+                    MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal, &self.signer);
                 rt.block_on(self.broadcast(NetworkMessage::MVBAProposal(mvba_proposal)));
             }
         } else {
             tracing::error!("No MVBA to broadcast");
         }
-        
     }
 
     /// Handle MVBA proposals here
@@ -339,11 +344,15 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::handle_mvba_proposals");
-        let return_votes = self.acs_manager.handle_mvba_proposals(mvba_proposals, &self.signer);
+        let return_votes = self
+            .acs_manager
+            .handle_mvba_proposals(mvba_proposals, &self.signer);
         for vote in return_votes {
             let rt = Runtime::new().unwrap();
             tracing::debug!("Sending mvba vote to peer {}", vote.mvba_proposal.authority);
-            rt.block_on(self.send_peer(vote.mvba_proposal.authority, NetworkMessage::MVBAVote(vote)));
+            rt.block_on(
+                self.send_peer(vote.mvba_proposal.authority, NetworkMessage::MVBAVote(vote)),
+            );
         }
     }
 
@@ -354,6 +363,8 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer
             .utilization_timer("Core::add_mvba_votes");
         let new_mvbas = self.acs_manager.add_mvba_votes(mvba_votes);
+        // also need to trigger the MVBA process if we have a certified MVBA
+        self.add_certified_mvbas(new_mvbas.clone());
         // if we just received enough votes for a new mvba, broadcast it
         for new_mvba in new_mvbas {
             let rt = Runtime::new().unwrap();
@@ -403,6 +414,7 @@ impl<H: BlockHandler> Core<H> {
                 // broadcast our own pisa bval
                 rt_own
                     .block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_own_bval.clone())));
+                tracing::debug!("add_certified_mvbas: first create and broadcast own bval {:?}", new_own_bval);
                 // also add the our created PisaABABval
                 let pisa_messages = self
                     .acs_manager
@@ -411,11 +423,11 @@ impl<H: BlockHandler> Core<H> {
                     let rt = Runtime::new().unwrap();
                     match pisa_msg {
                         PisaABAMessage::PisaABABval(new_bval) => {
-                            tracing::debug!("Create and broadcast own bval {:?}", new_bval);
+                            tracing::debug!("add_certified_mvbas: create and broadcast own bval {:?}", new_bval);
                             rt.block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_bval)));
                         }
                         PisaABAMessage::PisaABAAux(new_aux) => {
-                            tracing::debug!("Create and broadcast own aux {:?}", new_aux);
+                            tracing::debug!("add_certified_mvbas: Create and broadcast own aux {:?}", new_aux);
                             rt.block_on(self.broadcast(NetworkMessage::PisaABAAuxiliary(new_aux)));
                         }
                     }
@@ -424,21 +436,26 @@ impl<H: BlockHandler> Core<H> {
             // repropose 1 for the 0th aba round if needed
             if self.acs_manager.repropose_for_fin() {
                 for new_added_mvba in new_added_mvbas {
-                    tracing::debug!("Repropose for mvba {:?}", new_added_mvba);
                     let authority_index = new_added_mvba.authority;
-                    if self.acs_manager.acs_fin.mvba_view.mvba_round >= authority_index {
+                    let current_elected_mvba = self.acs_manager.acs_fin.current_election();
+                    tracing::debug!("Current elected is {}, but authority index is {}", current_elected_mvba, authority_index);
+                    if current_elected_mvba == authority_index {
                         // we miss propose 0 for this mvba, now repropose 1 for it
                         // todo: currently, we only consider authority indices start from 0 and are consecutive, i.e., [0,1,2,...]
-                        let new_view = FINMVBAView::new_with_rounds(authority_index, 0);
+                        let new_view = FINMVBAView::new_with_rounds(
+                            self.acs_manager.acs_fin.mvba_view.mvba_round,
+                            0,
+                        );
                         let new_bval =
                             PisaABABval::new(new_view, 1, 2, self.authority, &self.signer);
-                        let rt = Runtime::new().unwrap();
-                        rt.block_on(
+                        let repro_rt = Runtime::new().unwrap();
+                        repro_rt.block_on(
                             self.broadcast(NetworkMessage::PisaABABvalue(new_bval.clone())),
                         );
+                        tracing::debug!("Repropose for mvba bval {:?}", new_bval);
                     }
                     // otherwise, we don't need to repropose as we haven't enter that mvba round
-                }
+                } 
             }
         }
     }
@@ -462,6 +479,7 @@ impl<H: BlockHandler> Core<H> {
                 }
             }
         }
+
     }
 
     pub fn add_pisa_aba_auxiliaries(&mut self, bvals: Vec<PisaABAAux>) {
@@ -644,13 +662,13 @@ impl<H: BlockHandler> Core<H> {
             &self.signer,
         );
         self.last_seen_blocks
-                .entry(self.authority)
-                .and_modify(|last_seen_block| {
-                    if clock_round > last_seen_block.round {
-                        *last_seen_block = *block.reference();
-                    }
-                })
-                .or_insert(*block.reference());
+            .entry(self.authority)
+            .and_modify(|last_seen_block| {
+                if clock_round > last_seen_block.round {
+                    *last_seen_block = *block.reference();
+                }
+            })
+            .or_insert(*block.reference());
         assert_eq!(
             block.includes().get(0).unwrap().authority,
             self.authority,
