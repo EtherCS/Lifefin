@@ -468,6 +468,7 @@ impl FINMVBAView {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PisaABABval {
+    pub last_acs_round: RoundNumber, // the last round agreed by the ACS mode
     pub view: FINMVBAView, // the aba round number
     pub est: BinaryValue,
     pub maj: BinaryValue,
@@ -477,14 +478,16 @@ pub struct PisaABABval {
 
 impl PisaABABval {
     pub fn new(
+        last_acs_round: RoundNumber,
         view: FINMVBAView,
         est: BinaryValue,
         maj: BinaryValue,
         authority: AuthorityIndex,
         signer: &Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_bval(view.clone(), est, maj, authority);
+        let signature = signer.sign_pisa_aba_bval(last_acs_round, view.clone(), est, maj, authority);
         Self {
+            last_acs_round,
             view,
             est,
             maj,
@@ -498,7 +501,7 @@ impl PisaABABval {
     }
 
     pub fn digest(&self) -> PisaABADigest {
-        PisaABADigest::new(self.view.clone(), self.est, self.maj, self.authority)
+        PisaABADigest::new(self.last_acs_round, self.view.clone(), self.est, self.maj, self.authority)
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -525,6 +528,7 @@ impl fmt::Debug for PisaABABval {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PisaABAAux {
+    pub last_acs_round: RoundNumber, // the last round agreed by the ACS mode
     pub view: FINMVBAView, // the aba round number
     pub aux1: BinaryValue,
     pub aux2: BinaryValue,
@@ -534,14 +538,16 @@ pub struct PisaABAAux {
 
 impl PisaABAAux {
     pub fn new(
+        last_acs_round: RoundNumber, 
         view: FINMVBAView,
         aux1: BinaryValue,
         aux2: BinaryValue,
         authority: AuthorityIndex,
         signer: &Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_aux(view.clone(), aux1, aux2, authority);
+        let signature = signer.sign_pisa_aba_aux(last_acs_round, view.clone(), aux1, aux2, authority);
         Self {
+            last_acs_round,
             view,
             aux1,
             aux2,
@@ -555,7 +561,7 @@ impl PisaABAAux {
     }
 
     pub fn digest(&self) -> PisaABADigest {
-        PisaABADigest::new(self.view.clone(), self.aux1, self.aux2, self.authority)
+        PisaABADigest::new(self.last_acs_round, self.view.clone(), self.aux1, self.aux2, self.authority)
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -747,7 +753,7 @@ impl ACSFin {
                         tracing::debug!("Handling pisa aba bval {:?} in the 0-th aba round", bval);
                         if bval.authority == self.authority {
                             let return_aux =
-                                PisaABAAux::new(bval.view.clone(), 1, 1, self.authority, signer);
+                                PisaABAAux::new(self.last_acs_round, bval.view.clone(), 1, 1, self.authority, signer);
                             return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                         } else {
                             let est = bval.est;
@@ -1061,12 +1067,12 @@ impl ACSFin {
         {
             if delta_b == 1 {
                 let return_aux =
-                    PisaABAAux::new(bval.view.clone(), est, est, self.authority, signer);
+                    PisaABAAux::new(self.last_acs_round, bval.view.clone(), est, est, self.authority, signer);
                 // add own aux to the view
                 view_raba_aux.push(return_aux.clone());
                 return Some(return_aux);
             } else {
-                let return_aux = PisaABAAux::new(bval.view.clone(), 2, est, self.authority, signer);
+                let return_aux = PisaABAAux::new(self.last_acs_round, bval.view.clone(), 2, est, self.authority, signer);
                 // add own aux to the view
                 view_raba_aux.push(return_aux.clone());
                 return Some(return_aux);
@@ -1087,7 +1093,7 @@ impl ACSFin {
             .iter()
             .any(|aux| aux.authority == self.authority && aux.aux1 == aux1 && aux.aux2 == aux2)
         {
-            let new_aux = PisaABAAux::new(view.clone(), aux1, aux2, self.authority, signer);
+            let new_aux = PisaABAAux::new(self.last_acs_round, view.clone(), aux1, aux2, self.authority, signer);
             view_raba_aux.push(new_aux.clone());
             return Some(new_aux);
         }
@@ -1105,6 +1111,7 @@ impl ACSFin {
             .any(|b| b.authority == self.authority && b.est == est)
         {
             let new_bval = PisaABABval::new(
+                self.last_acs_round,
                 bval.view.clone(),
                 est,
                 self.current_maj,
@@ -1125,6 +1132,7 @@ impl ACSFin {
     ) -> PisaABABval {
         self.mvba_view.aba_round += 1;
         let new_pisa_aba_bval = PisaABABval::new(
+            self.last_acs_round,
             self.mvba_view.clone(),
             new_est,
             new_maj,

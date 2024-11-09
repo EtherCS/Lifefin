@@ -17,7 +17,7 @@ pub struct ACSManager {
     authority: AuthorityIndex,
     public_key: PublicKey,
     committee: Committee, // for verification
-    round: RoundNumber,   // the last round agreed by the ACS mode
+    pub round: RoundNumber,   // the last round agreed by the ACS mode
     last_seen_meta_post_blocks: HashMap<AuthorityIndex, MetaPoSTBlockData>,
     pub post_blocks: HashMap<AuthorityIndex, CertifiedPoSTBlockData>,
     pub acs_fin: ACSFin, // manage FIN messages
