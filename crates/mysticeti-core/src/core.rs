@@ -73,6 +73,7 @@ pub struct Core<H: BlockHandler> {
     last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
     acs_timeout: Duration,
     last_commit_time: Instant,
+    last_acs_output: ACSOutput,
     pub network_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
 }
 
@@ -196,6 +197,7 @@ impl<H: BlockHandler> Core<H> {
             last_seen_blocks,
             acs_timeout: public_config.parameters.acs_timeout,
             last_commit_time: Instant::now(),
+            last_acs_output: ACSOutput::new(0, vec![]),
             network_connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
@@ -220,22 +222,6 @@ impl<H: BlockHandler> Core<H> {
         connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
     ) {
         self.network_connections = connections;
-    }
-
-    // for test: done
-    pub async fn test_connections(&self) -> Option<()> {
-        // just for test:
-        for (_, c) in self.network_connections.read().unwrap().iter() {
-            let _ = c
-                .send(NetworkMessage::CertifiedMVBA(CertifiedMVBA::new(
-                    self.authority,
-                    0,
-                    0,
-                )))
-                .await
-                .ok()?;
-        }
-        Some(())
     }
 
     // Note that generally when you update this function you also want to change genesis initialization above
@@ -275,6 +261,10 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer
             .utilization_timer("Core::add_post_blocks");
         for post_block in blocks {
+            if post_block.stuck_round < self.acs_manager.round {
+                // ignore post blocks from previous rounds
+                continue;
+            }
             self.acs_manager.add_post_block(post_block, &self.signer);
         }
         // if we receive 2f+1 post blocks, we are ready to propose MVBA
@@ -294,7 +284,15 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_post_block_votes");
-        let new_post_blocks = self.acs_manager.add_votes(votes);
+        let mut filter_votes = Vec::new();
+        for vote in votes {
+            if vote.meta_post_block.stuck_round < self.acs_manager.round {
+                // ignore votes from previous rounds
+                continue;
+            }
+            filter_votes.push(vote);
+        } 
+        let new_post_blocks = self.acs_manager.add_votes(filter_votes);
         // if we just received enough votes for a new own post block, broadcast it
         for new_post_block in new_post_blocks {
             let rt = Runtime::new().unwrap();
@@ -344,9 +342,17 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::handle_mvba_proposals");
+        let mut filter_proposals = Vec::new();
+        for proposal in mvba_proposals {
+            if proposal.round < self.acs_manager.round {
+                // ignore proposals from previous rounds
+                continue;
+            }
+            filter_proposals.push(proposal);
+        }
         let return_votes = self
             .acs_manager
-            .handle_mvba_proposals(mvba_proposals, &self.signer);
+            .handle_mvba_proposals(filter_proposals, &self.signer);
         for vote in return_votes {
             let rt = Runtime::new().unwrap();
             tracing::debug!("Sending mvba vote to peer {}", vote.mvba_proposal.authority);
@@ -362,7 +368,15 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_mvba_votes");
-        let new_mvbas = self.acs_manager.add_mvba_votes(mvba_votes);
+        let mut filter_votes = Vec::new();
+        for vote in mvba_votes {
+            if vote.mvba_proposal.round < self.acs_manager.round {
+                // ignore votes from previous rounds
+                continue;
+            }
+            filter_votes.push(vote);
+        }
+        let new_mvbas = self.acs_manager.add_mvba_votes(filter_votes);
         // also need to trigger the MVBA process if we have a certified MVBA
         self.add_certified_mvbas(new_mvbas.clone());
         // if we just received enough votes for a new mvba, broadcast it
@@ -383,6 +397,10 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer("Core::add_certified_mvbas");
         let mut new_added_mvbas = Vec::new();
         for mvba in mvbas {
+            if mvba.round < self.acs_manager.round {
+                // ignore mvbas from previous rounds
+                continue;
+            }
             if self.acs_manager.add_certified_mvba(mvba.clone()) {
                 new_added_mvbas.push(mvba);
             }
@@ -410,7 +428,7 @@ impl<H: BlockHandler> Core<H> {
                 self.acs_manager
                     .enter_fin_mvba(FINMVBAView::new(), est, maj);
                 let new_own_bval =
-                    PisaABABval::new(new_view, est, maj, self.authority, &self.signer);
+                    PisaABABval::new(self.acs_manager.round, new_view, est, maj, self.authority, &self.signer);
                 // let rt_own = Runtime::new().unwrap();
                 // broadcast our own pisa bval
                 rt
@@ -449,7 +467,7 @@ impl<H: BlockHandler> Core<H> {
                             0,
                         );
                         let new_bval =
-                            PisaABABval::new(new_view, 1, 2, self.authority, &self.signer);
+                            PisaABABval::new(self.acs_manager.round, new_view, 1, 2, self.authority, &self.signer);
                         // let repro_rt = Runtime::new().unwrap();
                         rt.block_on(
                             self.broadcast(NetworkMessage::PisaABABvalue(new_bval.clone())),
@@ -467,7 +485,15 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_bvalues");
-        let pisa_messages = self.acs_manager.add_pisa_aba_bvals(bvals, &self.signer);
+        let mut filter_bvals = Vec::new();
+        for bval in bvals {
+            if bval.last_acs_round < self.acs_manager.round {
+                // ignore bvals from previous rounds
+                continue;
+            }
+            filter_bvals.push(bval);
+        }
+        let pisa_messages = self.acs_manager.add_pisa_aba_bvals(filter_bvals, &self.signer);
         for pisa_msg in pisa_messages {
             let rt = Runtime::new().unwrap();
             match pisa_msg {
@@ -484,12 +510,19 @@ impl<H: BlockHandler> Core<H> {
 
     }
 
-    pub fn add_pisa_aba_auxiliaries(&mut self, bvals: Vec<PisaABAAux>) {
+    pub fn add_pisa_aba_auxiliaries(&mut self, auxs: Vec<PisaABAAux>) {
         let _timer = self
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_pisa_aba_auxiliaries");
-        if let Some(mvba) = self.acs_manager.add_pisa_aba_auxs(bvals) {
+        let mut filter_auxs = Vec::new();
+        for aux in auxs {
+            if aux.last_acs_round < self.acs_manager.round {
+                continue;
+            }
+            filter_auxs.push(aux);
+        }
+        if let Some(mvba) = self.acs_manager.add_pisa_aba_auxs(filter_auxs) {
             // we are able to decide and complish the ACS process
             if mvba == 0 {
                 // this means that we haven't received the mvba
@@ -577,8 +610,10 @@ impl<H: BlockHandler> Core<H> {
         let new_leader_block = acs_output.new_leader(&self.committer);
         tracing::debug!("Committing ACS output {:?}", acs_output);
         tracing::debug!("New leader block {:?}", new_leader_block);
-        self.consensus_mode = ConsensusMode::Optimistic;
+        self.last_acs_output = acs_output.clone();
+        self.try_new_block_after_acs();
         self.acs_manager.reset(acs_output.round);
+        self.consensus_mode = ConsensusMode::Optimistic;
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -597,6 +632,78 @@ impl<H: BlockHandler> Core<H> {
             .expect("Failed to write statements to wal");
         self.pending
             .push_back((position, MetaStatement::Payload(statements)));
+    }
+
+    pub fn try_new_block_after_acs(&mut self) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::try_new_block_after_acs");
+        let clock_round = self.last_acs_output.round + 2;
+        let mut includes = vec![];
+        let statements = vec![];
+        for statement_block in self.last_acs_output.blocks.iter() {
+            includes.push(*statement_block.reference());
+        }
+        assert!(!includes.is_empty());
+        let time_ns = timestamp_utc().as_nanos();
+        let block = StatementBlock::new_with_signer(
+            self.authority,
+            clock_round,
+            includes,
+            statements,
+            time_ns,
+            self.epoch_changing(),
+            &self.signer,
+        );
+
+        tracing::debug!("creating block {block:?}");
+
+        // self.last_seen_blocks
+        //     .entry(self.authority)
+        //     .and_modify(|last_seen_block| {
+        //         if clock_round > last_seen_block.round {
+        //             *last_seen_block = *block.reference();
+        //         }
+        //     })
+        //     .or_insert(*block.reference());
+        // assert_eq!(
+        //     block.includes().get(0).unwrap().authority,
+        //     self.authority,
+        //     "Invalid block {}",
+        //     block
+        // );
+
+        // let block = Data::new(block);
+        // if block.serialized_bytes().len() > crate::wal::MAX_ENTRY_SIZE / 2 {
+        //     // Sanity check for now
+        //     panic!(
+        //         "Created an oversized block (check all limits set properly: {} > {}): {:?}",
+        //         block.serialized_bytes().len(),
+        //         crate::wal::MAX_ENTRY_SIZE / 2,
+        //         block.detailed()
+        //     );
+        // }
+        // self.threshold_clock
+        //     .add_block(*block.reference(), &self.committee);
+        // self.block_handler.handle_proposal(&block);
+        // self.proposed_block_stats(&block);
+        // let next_entry = if let Some((pos, _)) = self.pending.get(0) {
+        //     *pos
+        // } else {
+        //     WalPosition::MAX
+        // };
+        // self.last_own_block = OwnBlockData {
+        //     next_entry,
+        //     block: block.clone(),
+        // };
+        // (&mut self.wal_writer, &self.block_store).insert_own_block(&self.last_own_block);
+
+        // if self.options.fsync {
+        //     self.wal_writer.sync().expect("Wal sync failed");
+        // }
+
+        tracing::debug!("After ACS, created block {block:?}");
     }
 
     pub fn try_new_block(&mut self) -> Option<Data<StatementBlock>> {

@@ -830,7 +830,7 @@ impl ACSFin {
             }
             match aux.view.cmp(&self.mvba_view) {
                 Ordering::Less => {
-                    tracing::warn!("Received a pisa aba aux with older view: {:?}", aux.view);
+                    tracing::warn!("Received a pisa aba aux with older view: {:?}, my view: {:?}", aux.view, self.mvba_view);
                     continue;
                 }
                 Ordering::Greater => {
