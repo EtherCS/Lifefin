@@ -87,7 +87,8 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
                 self.try_new_block();
             }
             ConsensusMode::Fallback => {
-                // self.add_blocks_fallback(blocks);
+                self.core.add_blocks(blocks);
+                self.try_new_block();
             }
         }
     }
