@@ -387,6 +387,7 @@ impl<H: BlockHandler> Core<H> {
                 new_added_mvbas.push(mvba);
             }
         }
+        let rt = Runtime::new().unwrap();
         if !new_added_mvbas.is_empty() {
             // note that this only runs once when #mvba = n-f
             // warn: new_added_mvbas is a vector, leading that we might skip first_propose_for_fin()
@@ -410,17 +411,18 @@ impl<H: BlockHandler> Core<H> {
                     .enter_fin_mvba(FINMVBAView::new(), est, maj);
                 let new_own_bval =
                     PisaABABval::new(new_view, est, maj, self.authority, &self.signer);
-                let rt_own = Runtime::new().unwrap();
+                // let rt_own = Runtime::new().unwrap();
                 // broadcast our own pisa bval
-                rt_own
+                rt
                     .block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_own_bval.clone())));
                 tracing::debug!("add_certified_mvbas: first create and broadcast own bval {:?}", new_own_bval);
                 // also add the our created PisaABABval
                 let pisa_messages = self
                     .acs_manager
                     .add_pisa_aba_bvals(vec![new_own_bval], &self.signer);
+                // let rt = Runtime::new().unwrap();
                 for pisa_msg in pisa_messages {
-                    let rt = Runtime::new().unwrap();
+                    
                     match pisa_msg {
                         PisaABAMessage::PisaABABval(new_bval) => {
                             tracing::debug!("add_certified_mvbas: create and broadcast own bval {:?}", new_bval);
@@ -448,8 +450,8 @@ impl<H: BlockHandler> Core<H> {
                         );
                         let new_bval =
                             PisaABABval::new(new_view, 1, 2, self.authority, &self.signer);
-                        let repro_rt = Runtime::new().unwrap();
-                        repro_rt.block_on(
+                        // let repro_rt = Runtime::new().unwrap();
+                        rt.block_on(
                             self.broadcast(NetworkMessage::PisaABABvalue(new_bval.clone())),
                         );
                         tracing::debug!("Repropose for mvba bval {:?}", new_bval);
