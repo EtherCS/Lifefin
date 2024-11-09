@@ -3,7 +3,7 @@
 
 # bash run.sh
 
-export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG
+export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::acs_manager=DEBUG,mysticeti_core::acs_types=DEBUG
 
 # Change to the previous directory
 cd ..
