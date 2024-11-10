@@ -1038,7 +1038,6 @@ impl ACSFin {
         } else if decided_value == 1 {
             // the acs has decided
             tracing::debug!("Decided 1 in view {:?}, the acs is done!", self.mvba_view);
-            // todo: commit blocks with post blocks, update
             return Some(self.election(self.mvba_view.mvba_round));
         } else {
             // enter next aba round
@@ -1181,9 +1180,6 @@ impl ACSFin {
 
     /// majs
     pub fn get_majs_in_view(&mut self, view: FINMVBAView) -> Vec<BinaryValue> {
-        if self.mvba_view.aba_round == 0 {
-            // todo
-        }
         let mut majs = HashSet::new();
         if view > self.mvba_view {
             tracing::warn!("Fail to get majs: The view is in the future");
@@ -1219,9 +1215,6 @@ impl ACSFin {
     /// Agreement phase: vals
     pub fn get_agreement_phase_vals(&mut self, view: FINMVBAView) -> Vec<BinaryValue> {
         let mut return_vals = Vec::new();
-        if self.mvba_view.aba_round == 0 {
-            // todo
-        }
         let raba_aux = self.raba_aux.entry(view.clone()).or_insert(Vec::new());
         let aux_count = raba_aux.len();
         if aux_count < self.committee.acs_quorum_threshold() as usize {
@@ -1240,9 +1233,6 @@ impl ACSFin {
     /// Agreement phase: avals
     pub fn get_agreement_phase_avals(&mut self, view: FINMVBAView) -> Vec<BinaryValue> {
         let mut return_avals = Vec::new();
-        if self.mvba_view.aba_round == 0 {
-            // todo
-        }
         let raba_aux = self.raba_aux.entry(view.clone()).or_insert(Vec::new());
         let aux_count = raba_aux.len();
         if aux_count < self.committee.acs_quorum_threshold() as usize {
@@ -1256,18 +1246,6 @@ impl ACSFin {
             return_avals.push(aux.aux2);
         }
         return_avals
-    }
-
-    pub fn raba_propose(&self) {
-        // todo
-    }
-
-    pub fn raba_repropose(&self) {
-        // todo
-    }
-
-    pub fn raba_decide(&mut self) {
-        // todo
     }
 
     pub fn reset(&mut self, latest_commit_round: RoundNumber) {
@@ -1293,7 +1271,6 @@ impl ACSFin {
     /// todo: random
     /// Current election: coin flip
     pub fn coin(&self, aba_round: ABARoundNumber) -> BinaryValue {
-        // todo
         aba_round as BinaryValue % 2
     }
 
@@ -1375,7 +1352,6 @@ impl ACSFin {
             return delta_b;
         }
         if self.mvba_view.aba_round == 0 {
-            // todo
             delta_b = 1;
         }
         let last_coin = self.coin(self.mvba_view.aba_round - 1);

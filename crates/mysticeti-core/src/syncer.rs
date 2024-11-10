@@ -87,8 +87,7 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
                 self.try_new_block();
             }
             ConsensusMode::Fallback => {
-                self.core.add_blocks(blocks);
-                self.try_new_block();
+                // we won't accept any 'normal' blocks in fallback mode
             }
         }
     }
@@ -162,15 +161,8 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
                 }
             }
             ConsensusMode::Fallback => {
-                if self.core.last_proposed() == round {
-                    self.metrics.leader_timeout_total.inc();
-                    self.force_new_block = true;
-                    self.try_new_block();
-                    self.core.switch_to_optimistic();
-                    true
-                } else {
+                // we won't force new blocks in fallback mode
                     false
-                }
             }
         }
     }

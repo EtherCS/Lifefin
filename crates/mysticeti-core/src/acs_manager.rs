@@ -169,7 +169,7 @@ impl ACSManager {
             Ordering::Less => {
                 return false;
             }
-            // todo: may need to handle a future mvba proposal
+            // todo: need to handle a future mvba proposal?
             Ordering::Greater => {
                 tracing::warn!("Received a mvba with a round larger than the last ACS round");
                 return false;
