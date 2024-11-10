@@ -289,9 +289,14 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer("Core::add_post_block_votes");
         let mut filter_votes = Vec::new();
         for vote in votes {
-            if vote.meta_post_block.stuck_round < self.acs_manager.round {
-                // ignore votes from previous rounds
-                continue;
+            if let Some(last_seen_block) = self.last_seen_blocks.get(&vote.authority) {
+                if vote.meta_post_block.stuck_round < self.acs_manager.round
+                    || vote.meta_post_block.stuck_round < last_seen_block.round
+                {
+                    // ignore votes with previous rounds or rounds less than last seen block 
+                    tracing::debug!("stuck round {}, last_seen_block round {}", vote.meta_post_block.stuck_round, last_seen_block.round);
+                    continue;
+                }
             }
             filter_votes.push(vote);
         } 
@@ -622,7 +627,7 @@ impl<H: BlockHandler> Core<H> {
         // self.try_new_block_after_acs();
         self.add_blocks_after_acs(acs_output.blocks.clone());
         self.acs_manager.reset(acs_output.round);
-        // self.consensus_mode = ConsensusMode::Optimistic;
+        self.switch_to_optimistic();
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -785,6 +790,11 @@ impl<H: BlockHandler> Core<H> {
         }
 
         tracing::debug!("Created block {block:?}");
+
+        // ACS test: this is for acs test only:
+        if self.threshold_clock.get_round() == self.acs_trigger_round {
+            self.switch_to_fallback();
+        }
         Some(block)
     }
 
@@ -814,11 +824,6 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn try_commit(&mut self) -> Vec<Data<StatementBlock>> {
-        // ACS test: this is for acs test only:
-        if self.threshold_clock.get_round() == self.acs_trigger_round {
-            self.switch_to_fallback();
-            return vec![];
-        }
         let start = Instant::now();
         let sequence: Vec<_> = self
             .committer
