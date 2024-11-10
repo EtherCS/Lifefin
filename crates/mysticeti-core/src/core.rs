@@ -608,7 +608,6 @@ impl<H: BlockHandler> Core<H> {
             );
             rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlockVote(vote)));
         }
-        // todo: broadcast uncertified mvba to other peers
         tracing::info!("Switching to Fallback mode");
         self.consensus_mode = ConsensusMode::Fallback;
     }
@@ -619,7 +618,6 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
-        // todo: commit all history blocks based on acs_output
         let new_leader_block = acs_output.new_leader(&self.committer);
         tracing::debug!("Committing ACS output {:?}", acs_output);
         tracing::debug!("New leader block {:?}", new_leader_block);
