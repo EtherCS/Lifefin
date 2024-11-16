@@ -23,4 +23,4 @@ This software is licensed as [Apache 2.0](LICENSE).
 
 *Attack evaluation:* ongoing
 
-*Implementation:* ongoing
+*Implementation:* see this [branch](https://github.com/EtherCS/dagACS/tree/dev-ACS-sailfish)
