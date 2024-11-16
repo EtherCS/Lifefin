@@ -29,3 +29,5 @@ wal
 # don't check
 .pre-commit-config.yaml
 Cargo.lock
+
+*.csv
