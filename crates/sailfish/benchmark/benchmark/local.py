@@ -89,12 +89,14 @@ class LocalBench:
                     self._background_run(cmd, log_file)
 
             # Run the primaries (except the faulty ones).
+            fallback_round = self.node_parameters.json["fallback_round"]
             for i, address in enumerate(committee.primary_addresses(self.faults)):
                 cmd = CommandMaker.run_primary(
                     PathMaker.key_file(i),
                     PathMaker.committee_file(),
                     PathMaker.db_path(i),
                     PathMaker.parameters_file(),
+                    fallback_round=fallback_round,
                     debug=debug
                 )
                 log_file = PathMaker.primary_log_file(i)

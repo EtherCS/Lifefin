@@ -5,7 +5,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, NoVoteMsg, Timeout, Vote};
+use crate::messages::{Certificate, Header, NoVoteMsg, Timeout, Vote, PisaBval, PisaAux, PisaDecision};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -37,6 +37,9 @@ pub enum PrimaryMessage {
     Vote(Vote),
     Certificate(Certificate),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
+    PisaBval(PisaBval),
+    PisaAux(PisaAux),
+    PisaDecision(PisaDecision),
 }
 
 /// The messages sent by the primary to its workers.
@@ -68,6 +71,7 @@ impl Primary {
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_consensus_header: Sender<Header>,
+        fallback_round: Round,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -154,6 +158,7 @@ impl Primary {
             signature_service.clone(),
             consensus_round.clone(),
             parameters.gc_depth,
+            fallback_round,
             /* rx_primaries */ rx_primary_messages,
             /* rx_header_waiter */ rx_headers_loopback,
             /* rx_certificate_waiter */ rx_certificates_loopback,
@@ -289,3 +294,4 @@ impl MessageHandler for WorkerReceiverHandler {
         Ok(())
     }
 }
+

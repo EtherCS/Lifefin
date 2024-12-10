@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 
+pub type BinaryValue = u8;  // 0, 1, or 2 (None)
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
     pub author: PublicKey,
@@ -56,7 +58,7 @@ impl Header {
         ensure!(self.digest() == self.id, DagError::InvalidHeaderId);
 
         // Ensure the authority has voting rights.
-        let voting_rights = committee.stake(&self.author);
+        let voting_rights= committee.stake(&self.author);
         ensure!(voting_rights > 0, DagError::UnknownAuthority(self.author));
 
         // Ensure all worker ids are correct.
@@ -72,7 +74,7 @@ impl Header {
             .map_err(DagError::from)
 
         // Check if pointer to prev leader exists
-        
+
     }
 }
 
@@ -313,7 +315,7 @@ impl TimeoutCert {
         }
     }
 
-    // Adds a timeout to the certificate. 
+    // Adds a timeout to the certificate.
     pub fn add_timeout(&mut self, author: PublicKey, signature: Signature) -> DagResult<()> {
         // Ensure this public key hasn't already submitted a timeout for this round
         if self.timeouts.iter().any(|(pk, _)| *pk == author) {
@@ -482,3 +484,145 @@ impl PartialEq for Certificate {
         ret
     }
 }
+
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PisaBval {
+    pub author: PublicKey,
+    pub round: Round,
+    pub est: BinaryValue,
+    pub maj: BinaryValue,
+}
+
+impl PisaBval {
+    pub fn new(
+        author: PublicKey,
+        round: Round,
+        est: BinaryValue,
+        maj: BinaryValue,
+    ) -> Self {
+        Self {
+            author,
+            round,
+            est,
+            maj,
+        }
+    }
+}
+
+impl Hash for PisaBval {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(&self.est.to_le_bytes());
+        hasher.update(&self.maj.to_le_bytes());
+        hasher.update(&self.author);
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for PisaBval {
+    fn fmt(&self, f:&mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "PisaBval: PB({}, {})({}, {})",
+            self.author,
+            self.round,
+            self.est,
+            self.maj
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PisaAux {
+    pub author: PublicKey,
+    pub round: Round,
+    pub val1: BinaryValue,
+    pub val2: BinaryValue,
+}
+
+impl PisaAux {
+    pub fn new(
+        author: PublicKey,
+        round: Round,
+        val1: BinaryValue,
+        val2: BinaryValue,
+    ) -> Self {
+        Self {
+            author,
+            round,
+            val1,
+            val2,
+        }
+    }
+}
+
+impl Hash for PisaAux {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(&self.val1.to_le_bytes());
+        hasher.update(&self.val2.to_le_bytes());
+        hasher.update(&self.author);
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for PisaAux {
+    fn fmt(&self, f:&mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "PisaAux: PA({}, {})({}, {})",
+            self.author,
+            self.round,
+            self.val1,
+            self.val2
+        )
+    }
+}
+
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PisaDecision{
+    pub author: PublicKey,
+    pub round: Round,
+    pub val: BinaryValue,
+}
+
+impl PisaDecision{
+    pub fn new(
+        author: PublicKey,
+        round: Round,
+        val: BinaryValue,
+    ) -> Self {
+        Self {
+            author,
+            round,
+            val,
+        }
+    }
+}
+
+impl Hash for PisaDecision{
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(&self.val.to_le_bytes());
+        hasher.update(&self.author);
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for PisaDecision{
+    fn fmt(&self, f:&mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "DecideMessage: PD({}, {})({})",
+            self.author,
+            self.round,
+            self.val
+        )
+    }
+}
+

@@ -19,7 +19,7 @@ def local(ctx, debug=True):
         'rate': 50_000,
         'tx_size': 512,
         'duration': 20,
-        "burst" : 10
+        "burst": 10
     }
     node_params = {
         'header_size': 1,  # bytes
@@ -28,7 +28,8 @@ def local(ctx, debug=True):
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 50_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 200,  # ms
+        'fallback_round': 3  # rounds
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -104,7 +105,7 @@ def remote(ctx, burst = 50, debug=False):
         'duration': 180,
         'runs': 1,
         'burst' : [burst],
-    } 
+    }
 
     nodes = bench_params['nodes']
     rate =  1000 * nodes

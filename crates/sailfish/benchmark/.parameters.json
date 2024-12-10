@@ -1,5 +1,6 @@
 {
     "batch_size": 50000,
+    "fallback_round": 3,
     "gc_depth": 50,
     "header_size": 1,
     "max_batch_delay": 200,

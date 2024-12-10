@@ -47,7 +47,7 @@ class Committee:
 
     def address_list_to_json(addresses, base_port, faults):
         ''' The `addresses` field looks as follows:
-            { 
+            {
                 "name": ["host", "host", ...],
                 ...
             }
@@ -168,12 +168,12 @@ class Committee:
     def ip(address):
         assert isinstance(address, str)
         return address.split(':')[0]
-    
+
     def faults(self):
         '''Returns the total number of Byzantine authorities.'''
         num_honest = sum([1 for a in self.json['authorities'].values() if a['is_honest']])
         return self.size() - num_honest
-    
+
     def print(self, filename):
         assert isinstance(filename, str)
         with open(filename, 'w') as f:
@@ -202,6 +202,7 @@ class NodeParameters:
             inputs += [json['sync_retry_nodes']]
             inputs += [json['batch_size']]
             inputs += [json['max_batch_delay']]
+            inputs += [json['fallback_round']]
         except KeyError as e:
             raise ConfigError(f'Malformed parameters: missing key {e}')
 
@@ -233,7 +234,6 @@ class BenchParameters:
                 raise ConfigError('Missing input rate')
             self.rate = [int(x) for x in rate]
 
-            
             self.workers = int(json['workers'])
 
             if 'collocate' in json:
@@ -242,13 +242,13 @@ class BenchParameters:
                 self.collocate = True
 
             self.tx_size = int(json['tx_size'])
-           
+
             self.duration = int(json['duration'])
 
             self.runs = int(json['runs']) if 'runs' in json else 1
 
             self.burst = json['burst']
-            
+
         except KeyError as e:
             raise ConfigError(f'Malformed bench parameters: missing key {e}')
 

@@ -180,6 +180,17 @@ impl Committee {
         (total_votes + 2) / 3
     }
 
+    pub fn majority_threshold(&self) -> Stake {
+        // If N = 3f + 1 + k (0 <= k < 3)
+        // then (N + 2) / 3 = f + 1 + k/3 = f + 1
+        // then (4N + 2) / 3 = (N + 2) / 3 + N = N + f + 1
+        // (2N + 1) / 3 = (N + f + 1) / 2
+        // (2N + 3) / 3 = ceil((N + f + 1) / 2)
+        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        (2*total_votes + 3) / 3
+
+    }
+
     /// Returns a leader node in a round-robin fashion.
     /// This does not have to be changed because it works for odd and even numbers.
     pub fn leader(&self, seed: usize) -> PublicKey {
@@ -276,4 +287,11 @@ impl Default for KeyPair {
     fn default() -> Self {
         Self::new()
     }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConsensusMode {
+    Optimistic = 0,
+    Fallback = 1,
 }
