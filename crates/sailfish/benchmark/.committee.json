@@ -1,6 +1,6 @@
 {
     "authorities": {
-        "9JRBnIY4PkSJi7phhNSCRFdd5r3yS4A4rhiSLBPb/Pk=": {
+        "Kn9PYZqgwi1yhZyAFlfrX/CZx0DN11vXhx14gvX8ROg=": {
             "is_honest": true,
             "stake": 1,
             "consensus": {
@@ -18,7 +18,7 @@
                 }
             }
         },
-        "M/eWowf//k948jgkZMub9/G5rnE0mv1g6p+rxGMnZ9Q=": {
+        "vCDOC3baDtFfu1ZeQ81nkxxS3pT5KL1AtqGxan5u0fM=": {
             "is_honest": true,
             "stake": 1,
             "consensus": {
@@ -36,7 +36,7 @@
                 }
             }
         },
-        "AV1F6Spf5orlIXuhDL9jWNo5y1QbU+keqj774ysLkKg=": {
+        "QB55b6UtkPA0zqeePoSVy4RwOqqsX2D0q5V4llNsRuI=": {
             "is_honest": true,
             "stake": 1,
             "consensus": {
@@ -54,7 +54,7 @@
                 }
             }
         },
-        "rUIxGa/3+mtX65XI0R1BbpWOfFTVEvCagCf4Cbj9iIE=": {
+        "AUAZ7mXUVDjodBwzewQpH4QFybnav6dP6Xe2KhD/tFU=": {
             "is_honest": true,
             "stake": 1,
             "consensus": {

@@ -41,6 +41,8 @@ pub struct Core {
     consensus_mode: ConsensusMode,
     /// The AcsFin protocol manager.
     acs_fin_manager: AcsFin,
+    /// Buffer for optimistic messages received in fallback mode.
+    optimistic_buffer: Vec<PrimaryMessage>,
 
     /// Receiver for dag messages (headers, timeouts, votes, certificates).
     rx_primaries: Receiver<PrimaryMessage>,
@@ -131,6 +133,7 @@ impl Core {
                 gc_depth,
                 consensus_mode: ConsensusMode::Optimistic,
                 acs_fin_manager: AcsFin::spawn(name),
+                optimistic_buffer: Vec::new(),
                 rx_primaries,
                 rx_header_waiter,
                 rx_certificate_waiter,
@@ -244,12 +247,8 @@ impl Core {
 
     #[async_recursion]
     async fn process_header(&mut self, header: &Header) -> DagResult<()> {
-        debug!("Processing {:?}", header);
-
-        if header.round >= self.fallback_round && !self.fallback_mode_performed {
-            self.switch_to_fallback_mode().await;
-            self.fallback_mode_performed = true;
-        }
+        //debug!("Processing {:?}", header);
+        info!("Processing header {} fo round {}", header.author, header.round);
 
         // Send header to consensus
         self.tx_consensus_header.send(header.clone())
@@ -333,6 +332,12 @@ impl Core {
                     .push(handler);
             }
         }
+
+        if header.round >= self.fallback_round && !self.fallback_mode_performed {
+            self.switch_to_fallback_mode().await;
+            self.fallback_mode_performed = true;
+        }
+
         Ok(())
     }
 
@@ -430,7 +435,8 @@ impl Core {
 
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
-        debug!("Processing {:?}", certificate);
+        // debug!("Processing {:?}", certificate);
+        info!("Processing certificate {} for round {}", certificate.origin(), certificate.round());
 
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
@@ -536,9 +542,57 @@ impl Core {
         }
     }
 
-    fn switch_to_optimistic_mode(&mut self) {
+    async fn switch_to_optimistic_mode(&mut self) {
         self.consensus_mode = ConsensusMode::Optimistic;
         debug!("Switched to optimistic mode");
+
+        let messages: Vec<PrimaryMessage> = self.optimistic_buffer.drain(..).collect();
+
+        for message in messages {
+            let result = match message{
+                PrimaryMessage::Header(header) => {
+                    match self.sanitize_header(&header) {
+                        Ok(()) => self.process_header(&header).await,
+                        error => error
+                    }
+                },
+                PrimaryMessage::Timeout(timeout) => {
+                    match self.sanitize_timeout(&timeout) {
+                        Ok(()) => self.process_timeout(timeout).await,
+                        error => error
+                    }
+                },
+                PrimaryMessage::NoVoteMsg(no_vote_msg) => {
+                    match self.sanitize_no_vote_msg(&no_vote_msg) {
+                        Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
+                        error => error
+                    }
+                },
+                PrimaryMessage::Vote(vote) => {
+                    match self.sanitize_vote(&vote) {
+                        Ok(()) => self.process_vote(vote).await,
+                        error => error
+                    }
+                },
+                PrimaryMessage::Certificate(certificate) => {
+                    match self.sanitize_certificate(&certificate) {
+                        Ok(()) => self.process_certificate(certificate).await,
+                        error => error
+                    }
+                },
+                _ => panic!("Unexpected core message")
+            };
+
+            match result {
+                Ok(()) => (),
+                Err(DagError::StoreError(e)) => {
+                    error!("{}", e);
+                    panic!("Storage failure: killing node.");
+                }
+                Err(e @ DagError::TooOld(..)) => debug!("{}", e),
+                Err(e) => warn!("{}", e),
+            }
+        }
     }
 
     async fn process_pisa_bval(&mut self, pisa_bval: PisaBval) -> DagResult<()> {
@@ -785,7 +839,7 @@ impl Core {
                     .entry(pisa_aux.round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
-                self.switch_to_optimistic_mode();
+                self.switch_to_optimistic_mode().await;
             }
             else {
                 let handlers = self
@@ -837,7 +891,7 @@ impl Core {
                     .or_insert_with(Vec::new)
                     .extend(handlers);
 
-                self.switch_to_optimistic_mode();
+                self.switch_to_optimistic_mode().await;
             }
             else {
                 // If we are not able to decide yet we continue to the next round.
@@ -876,7 +930,7 @@ impl Core {
                     .or_insert_with(Vec::new)
                     .extend(handlers);
 
-                self.switch_to_optimistic_mode();
+                self.switch_to_optimistic_mode().await;
             }
         }
         Ok(())
@@ -982,33 +1036,64 @@ impl Core {
                 Some(message) = self.rx_primaries.recv() => {
                     match message {
                         PrimaryMessage::Header(header) => {
-                            match self.sanitize_header(&header) {
-                                Ok(()) => self.process_header(&header).await,
-                                error => error
+                            if self.consensus_mode == ConsensusMode::Optimistic {
+                                match self.sanitize_header(&header) {
+                                    Ok(()) => self.process_header(&header).await,
+                                    error => error
+                                }
+                            } else {
+                                // If we are in fallback mode we buffer the messages.
+                                self.optimistic_buffer.push(PrimaryMessage::Header(header));
+                                Ok(())
                             }
+                            
                         },
                         PrimaryMessage::Timeout(timeout) => {
-                            match self.sanitize_timeout(&timeout) {
-                                Ok(()) => self.process_timeout(timeout).await,
-                                error => error
+                            if self.consensus_mode == ConsensusMode::Optimistic {
+                                match self.sanitize_timeout(&timeout) {
+                                    Ok(()) => self.process_timeout(timeout).await,
+                                    error => error
+                                }
+                            } else {
+                                // If we are in fallback mode we buffer the messages.
+                                self.optimistic_buffer.push(PrimaryMessage::Timeout(timeout));
+                                Ok(())
                             }
                         },
                         PrimaryMessage::NoVoteMsg(no_vote_msg) => {
-                            match self.sanitize_no_vote_msg(&no_vote_msg) {
-                                Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
-                                error => error
+                            if self.consensus_mode == ConsensusMode::Optimistic {
+                                match self.sanitize_no_vote_msg(&no_vote_msg) {
+                                    Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
+                                    error => error
+                                }
+                            } else {
+                                // If we are in fallback mode we buffer the messages.
+                                self.optimistic_buffer.push(PrimaryMessage::NoVoteMsg(no_vote_msg));
+                                Ok(())
                             }
                         },
                         PrimaryMessage::Vote(vote) => {
-                            match self.sanitize_vote(&vote) {
-                                Ok(()) => self.process_vote(vote).await,
-                                error => error
+                            if self.consensus_mode == ConsensusMode::Optimistic {
+                                match self.sanitize_vote(&vote) {
+                                    Ok(()) => self.process_vote(vote).await,
+                                    error => error
+                                }
+                            } else {
+                                // If we are in fallback mode we buffer the messages.
+                                self.optimistic_buffer.push(PrimaryMessage::Vote(vote));
+                                Ok(())
                             }
                         },
                         PrimaryMessage::Certificate(certificate) => {
-                            match self.sanitize_certificate(&certificate) {
-                                Ok(()) =>  self.process_certificate(certificate).await,
-                                error => error
+                            if self.consensus_mode == ConsensusMode::Optimistic {
+                                match self.sanitize_certificate(&certificate) {
+                                    Ok(()) => self.process_certificate(certificate).await,
+                                    error => error
+                                }
+                            } else {
+                                // If we are in fallback mode we buffer the messages.
+                                self.optimistic_buffer.push(PrimaryMessage::Certificate(certificate));
+                                Ok(())
                             }
                         },
                         PrimaryMessage::PisaBval(pisa_bval) => {
