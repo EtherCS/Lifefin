@@ -111,6 +111,7 @@ class LocalBench:
                         PathMaker.db_path(i, id),
                         PathMaker.parameters_file(),
                         id,  # The worker's id.
+                        fallback_round=fallback_round,
                         debug=debug
                     )
                     log_file = PathMaker.worker_log_file(i, id)
