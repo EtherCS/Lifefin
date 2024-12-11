@@ -141,3 +141,11 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+.db*
+db_*
+.*db-*
+*.json
+*.log
+# will have compiled files and executables
+**/target/
