@@ -247,19 +247,47 @@ impl<H: BlockHandler> Core<H> {
 
         let mut includes = vec![];
         let mut statements = vec![];
-
-        let first_include_index = self
-            .pending
-            .iter()
-            .position(|(_, statement)| match statement {
-                MetaStatement::Include(block_ref) => block_ref.round >= clock_round,
-                _ => false,
-            })
-            .unwrap_or(self.pending.len());
+        let mut taken = VecDeque::new();
         let recover_pending = self.pending.clone();
-        let mut taken = self.pending.split_off(first_include_index);
-        // Split off returns the "tail", what we want is keep the tail in "pending" and get the head
-        mem::swap(&mut taken, &mut self.pending);
+
+        match self.attack_type {
+            AttackType::Inflation => {
+                // fix the logic of finding `includes`
+                let mut new_pending = VecDeque::new();
+
+                for (wal_position, statement) in self.pending.drain(..) {
+                    match statement {
+                        MetaStatement::Include(block_ref) => {
+                            if block_ref.round < clock_round {
+                                taken.push_back((wal_position, MetaStatement::Include(block_ref)));
+                            } else {
+                                new_pending.push_back((wal_position, MetaStatement::Include(block_ref)));
+                            }
+                        }
+                        other => {
+                            new_pending.push_back((wal_position, other));
+                        }
+                    }
+                }
+
+                self.pending = new_pending;
+            }
+            _ => {
+                // for honest nodes, remain the same
+                let first_include_index = self
+                    .pending
+                    .iter()
+                    .position(|(_, statement)| match statement {
+                        MetaStatement::Include(block_ref) => block_ref.round >= clock_round,
+                        _ => false,
+                    })
+                    .unwrap_or(self.pending.len());
+                taken = self.pending.split_off(first_include_index);
+                // Split off returns the "tail", what we want is keep the tail in "pending" and get the head
+                mem::swap(&mut taken, &mut self.pending);
+            }
+        }
+        
         // Compress the references in the block
         // Iterate through all the include statements in the block, and make a set of all the references in their includes.
         let mut references_in_block: HashSet<BlockReference> = HashSet::new();
@@ -273,6 +301,7 @@ impl<H: BlockHandler> Core<H> {
             }
         }
         includes.push(*self.last_own_block.block.reference());
+
         for (_, statement) in taken.into_iter() {
             match statement {
                 MetaStatement::Include(include) => {
@@ -344,7 +373,9 @@ impl<H: BlockHandler> Core<H> {
             &self.signer,
         );
         // won't create invalid block, e.g., A3(A1, B2, C2), after launching inflation attack
-        if let Err(_) = block.verify(&self.committee) {
+        if let Err(e) = block.verify(&self.committee) {
+            tracing::error!("Invalid block: {}", e);
+            tracing::debug!("Created block {block:?}");
             self.pending = recover_pending;
             return None;
         }
