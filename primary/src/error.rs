@@ -36,6 +36,9 @@ pub enum DagError {
     #[error("Invalid header id")]
     InvalidHeaderId,
 
+    #[error("Invalid meta post dg")]
+    InvalidMetaPoSTId,
+
     #[error("Malformed header {0}")]
     MalformedHeader(Digest),
 

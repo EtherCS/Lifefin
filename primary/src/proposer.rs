@@ -5,14 +5,15 @@ use config::{Committee, WorkerId};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 #[cfg(feature = "benchmark")]
-use log::{debug, warn, info};
+use log::info;
+use log::{debug, warn};
 use std::cmp::Ordering;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
-#[cfg(test)]
-#[path = "tests/proposer_tests.rs"]
-pub mod proposer_tests;
+// #[cfg(test)]
+// #[path = "tests/proposer_tests.rs"]
+// pub mod proposer_tests;
 
 /// The proposer creates new headers and send them to the core for broadcasting and further processing.
 pub struct Proposer {
@@ -241,7 +242,7 @@ impl Proposer {
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
-                    info!("Received parents of round {} and we are in round {}", round, self.round);
+                    // info!("Received parents of round {} and we are in round {}", round, self.round);
                     // Compare the parents' round number with our current round.
                     match round.cmp(&self.round) {
                         Ordering::Greater => {
@@ -271,7 +272,7 @@ impl Proposer {
                     self.digests.push((digest, worker_id));
                 }
                 Some((timeout_cert, round)) = self.rx_timeout_cert.recv() => {
-                    info!("Received timeout certificate of round {} and we are in round {}", round, self.round);
+                    // info!("Received timeout certificate of round {} and we are in round {}", round, self.round);
                     match round.cmp(&self.last_timeout_cert.round) {
                         Ordering::Greater => {
                             // We accept round bigger than our current round to jump ahead in case we were

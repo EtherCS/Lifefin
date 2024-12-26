@@ -18,7 +18,7 @@ def local(ctx, debug=True):
         'workers': 1,
         'rate': 50_000,
         'tx_size': 512,
-        'duration': 20,
+        'duration': 30,
         "burst": 10
     }
     node_params = {
@@ -29,7 +29,7 @@ def local(ctx, debug=True):
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 50_000,  # bytes
         'max_batch_delay': 200,  # ms
-        'fallback_round': 20  # rounds
+        'fallback_round': 5  # rounds
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

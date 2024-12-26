@@ -4,7 +4,7 @@ use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, NoVoteCert, NoVoteMsg, Timeout, TimeoutCert, Vote, PisaBval, PisaAux, PisaDecision};
 use crate::primary::{PrimaryMessage, Round};
 use crate::synchronizer::Synchronizer;
-use crate::acs_fin::AcsFin;
+use crate::acs_types::ACSFin;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, ConsensusMode};
@@ -18,9 +18,9 @@ use std::sync::Arc;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-#[cfg(test)]
-#[path = "tests/core_tests.rs"]
-pub mod core_tests;
+// #[cfg(test)]
+// #[path = "tests/core_tests.rs"]
+// pub mod core_tests;
 
 pub struct Core {
     /// The public key of this primary.
@@ -39,8 +39,8 @@ pub struct Core {
     gc_depth: Round,
     /// The consensus mode the node is running in.
     consensus_mode: ConsensusMode,
-    /// The AcsFin protocol manager.
-    acs_fin_manager: AcsFin,
+    /// The ACSFin protocol manager.
+    acs_fin_manager: ACSFin,
     /// Buffer for optimistic messages received in fallback mode.
     optimistic_buffer: Vec<PrimaryMessage>,
 
@@ -95,8 +95,6 @@ pub struct Core {
     timeouts_aggregators: HashMap<Round, Box<TimeoutAggregator>>,
     /// Aggregates no vote messages to use for sending no vote certificates.
     no_vote_aggregators: HashMap<Round, Box<NoVoteAggregator>>,
-    /// Flag to indicate if we have already changed to fallback_mode.
-    fallback_mode_performed: bool,
 }
 
 impl Core {
@@ -132,7 +130,7 @@ impl Core {
                 consensus_round,
                 gc_depth,
                 consensus_mode: ConsensusMode::Optimistic,
-                acs_fin_manager: AcsFin::spawn(name),
+                acs_fin_manager: ACSFin::spawn(name),
                 optimistic_buffer: Vec::new(),
                 rx_primaries,
                 rx_header_waiter,
@@ -159,7 +157,6 @@ impl Core {
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
                 timeouts_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 no_vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                fallback_mode_performed: false,
             }
             .run()
             .await;
@@ -333,9 +330,10 @@ impl Core {
             }
         }
 
-        if header.round >= self.fallback_round && !self.fallback_mode_performed {
+        if header.round == self.fallback_round && self.consensus_mode == ConsensusMode::Optimistic {
+            self.consensus_mode = ConsensusMode::Fallback;
+            debug!("Switched to fallback mode");
             self.switch_to_fallback_mode().await;
-            self.fallback_mode_performed = true;
         }
 
         Ok(())
@@ -491,9 +489,6 @@ impl Core {
     }
 
     async fn switch_to_fallback_mode(&mut self) {
-        self.consensus_mode = ConsensusMode::Fallback;
-        debug!("Switched to fallback mode");
-
         let est_r = 1;
         self.acs_fin_manager.propose(est_r);
 

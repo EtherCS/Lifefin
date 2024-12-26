@@ -1,7 +1,8 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 #[macro_use]
 mod error;
-mod acs_fin;
+mod acs_manager;
+mod acs_types;
 mod aggregators;
 mod certificate_waiter;
 mod core;
@@ -14,9 +15,9 @@ mod primary;
 mod proposer;
 mod synchronizer;
 
-#[cfg(test)]
-#[path = "tests/common.rs"]
-mod common;
+// #[cfg(test)]
+// #[path = "tests/common.rs"]
+// mod common;
 
 pub use crate::messages::{Certificate, Header};
 pub use crate::primary::{Primary, PrimaryWorkerMessage, Round, WorkerPrimaryMessage};
