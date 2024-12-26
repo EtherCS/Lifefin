@@ -149,3 +149,5 @@ db_*
 *.log
 # will have compiled files and executables
 **/target/
+
+data
