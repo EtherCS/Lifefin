@@ -79,6 +79,10 @@ pub struct Parameters {
     /// The delay after which the workers seal a batch of transactions, even if `max_batch_size`
     /// is not reached. Denominated in ms.
     pub max_batch_delay: u64,
+    /// The timeout for triggering ACS
+    pub acs_timeout: u64,
+    /// (Test only) The round to trigger fallback path
+    pub fallback_round: u64,
 }
 
 impl Default for Parameters {
@@ -91,6 +95,8 @@ impl Default for Parameters {
             sync_retry_nodes: 3,
             batch_size: 500_000,
             max_batch_delay: 100,
+            acs_timeout: 3_600_000,
+            fallback_round: 20,
         }
     }
 }
@@ -106,6 +112,8 @@ impl Parameters {
         info!("Sync retry nodes set to {} nodes", self.sync_retry_nodes);
         info!("Batch size set to {} B", self.batch_size);
         info!("Max batch delay set to {} ms", self.max_batch_delay);
+        info!("ACS timeout set to {} ms", self.acs_timeout);
+        info!("Fallback round set to {}", self.fallback_round);
     }
 }
 
@@ -194,6 +202,12 @@ impl Committee {
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         (2*total_votes + 3) / 3
 
+    }
+
+    /// Returns the stake required to reach a reliable broadcast threshold (1).
+    pub fn reliable_broadcast_threshold(&self) -> Stake {
+        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        total_votes / self.authorities.len() as Stake
     }
 
     /// Returns a leader node in a round-robin fashion.

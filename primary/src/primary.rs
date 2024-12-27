@@ -1,3 +1,4 @@
+use crate::acs_types::{MetaPoSTBlockData, PoSTBlockVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote};
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::certificate_waiter::CertificateWaiter;
 use crate::core::Core;
@@ -37,6 +38,10 @@ pub enum PrimaryMessage {
     Vote(Vote),
     Certificate(Certificate),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
+    MetaPoSTBlockData(MetaPoSTBlockData),
+    PoSTBlockVote(PoSTBlockVote),
+    CertifiedPoSTBlockData(CertifiedPoSTBlockData),
+    CertifiedPoSTBlockVote(CertifiedPoSTBlockVote),
     PisaBval(PisaBval),
     PisaAux(PisaAux),
     PisaDecision(PisaDecision),
@@ -71,7 +76,6 @@ impl Primary {
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_consensus_header: Sender<Header>,
-        fallback_round: Round,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -149,6 +153,8 @@ impl Primary {
         // The `SignatureService` is used to require signatures on specific digests.
         let signature_service = SignatureService::new(secret);
 
+        let fallback_round = parameters.fallback_round as Round;
+        let acs_timeout = parameters.acs_timeout;
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
             name,
@@ -158,7 +164,6 @@ impl Primary {
             signature_service.clone(),
             consensus_round.clone(),
             parameters.gc_depth,
-            fallback_round,
             /* rx_primaries */ rx_primary_messages,
             /* rx_header_waiter */ rx_headers_loopback,
             /* rx_certificate_waiter */ rx_certificates_loopback,
@@ -170,6 +175,8 @@ impl Primary {
             tx_timeout_cert,
             tx_no_vote_cert,
             tx_consensus_header,
+            fallback_round,
+            acs_timeout,
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
