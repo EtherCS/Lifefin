@@ -1,16 +1,23 @@
+use crate::acs_manager::ACSManager;
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::aggregators::{CertificatesAggregator, NoVoteAggregator, TimeoutAggregator, VotesAggregator, PisaBvalAggregator, PisaAuxAggregator, PisaDesicionAggregator};
+use crate::acs_types::ACSFin;
+use crate::aggregators::{
+    CertificatesAggregator, NoVoteAggregator, PisaAuxAggregator, PisaBvalAggregator,
+    PisaDesicionAggregator, TimeoutAggregator, VotesAggregator,
+};
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, NoVoteCert, NoVoteMsg, Timeout, TimeoutCert, Vote, PisaBval, PisaAux, PisaDecision};
+use crate::messages::{
+    Certificate, Header, NoVoteCert, NoVoteMsg, PisaAux, PisaBval, PisaDecision, Timeout,
+    TimeoutCert, Vote,
+};
 use crate::primary::{PrimaryMessage, Round};
 use crate::synchronizer::Synchronizer;
-use crate::acs_types::ACSFin;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, ConsensusMode};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
-use log::{debug, error, warn, info};
+use log::{debug, error, info, warn};
 use network::{CancelHandler, ReliableSender};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,10 +44,11 @@ pub struct Core {
     consensus_round: Arc<AtomicU64>,
     /// The depth of the garbage collector.
     gc_depth: Round,
+
     /// The consensus mode the node is running in.
     consensus_mode: ConsensusMode,
     /// The ACSFin protocol manager.
-    acs_fin_manager: ACSFin,
+    acs_manager: ACSManager,
     /// Buffer for optimistic messages received in fallback mode.
     optimistic_buffer: Vec<PrimaryMessage>,
 
@@ -123,14 +131,14 @@ impl Core {
         tokio::spawn(async move {
             Self {
                 name,
-                committee,
+                committee: committee.clone(),
                 store,
                 synchronizer,
                 signature_service,
                 consensus_round,
                 gc_depth,
                 consensus_mode: ConsensusMode::Optimistic,
-                acs_fin_manager: ACSFin::spawn(name),
+                acs_manager: ACSManager::new(name, committee.clone()),
                 optimistic_buffer: Vec::new(),
                 rx_primaries,
                 rx_header_waiter,
@@ -196,9 +204,7 @@ impl Core {
             .expect("Failed to serialize own no vote message");
 
         // Send No Vote Msg to the leader of the round
-        let leader_pub_key = self
-            .committee
-            .leader((no_vote_msg.round + 1) as usize);
+        let leader_pub_key = self.committee.leader((no_vote_msg.round + 1) as usize);
 
         let address = self
             .committee
@@ -213,7 +219,10 @@ impl Core {
             .push(handler);
 
         // Log the broadcast for debugging purposes.
-        debug!("Broadcasted own no vote message for round {}", no_vote_msg.round);
+        debug!(
+            "Broadcasted own no vote message for round {}",
+            no_vote_msg.round
+        );
 
         Ok(())
     }
@@ -245,10 +254,14 @@ impl Core {
     #[async_recursion]
     async fn process_header(&mut self, header: &Header) -> DagResult<()> {
         //debug!("Processing {:?}", header);
-        info!("Processing header {} fo round {}", header.author, header.round);
+        info!(
+            "Processing header {} fo round {}",
+            header.author, header.round
+        );
 
         // Send header to consensus
-        self.tx_consensus_header.send(header.clone())
+        self.tx_consensus_header
+            .send(header.clone())
             .await
             .expect("Failed to send header to consensus");
         // Indicate that we are processing this header.
@@ -275,7 +288,11 @@ impl Core {
             );
             stake += self.committee.stake(&x.origin());
 
-            has_leader = has_leader || self.committee.leader((header.round - 1) as usize).eq(&x.header.author);
+            has_leader = has_leader
+                || self
+                    .committee
+                    .leader((header.round - 1) as usize)
+                    .eq(&x.header.author);
         }
         ensure!(
             stake >= self.committee.quorum_threshold(),
@@ -284,7 +301,11 @@ impl Core {
 
         if !has_leader {
             header.timeout_cert.verify(&self.committee)?;
-            if self.committee.leader(header.round as usize).eq(&header.author) {
+            if self
+                .committee
+                .leader(header.round as usize)
+                .eq(&header.author)
+            {
                 header.no_vote_cert.verify(&self.committee)?;
             }
         }
@@ -369,15 +390,17 @@ impl Core {
             let initial_no_vote_msg = NoVoteMsg::new(
                 no_vote_msg.round,
                 self.name.clone(),
-                &mut self.signature_service
-            ).await;
+                &mut self.signature_service,
+            )
+            .await;
 
             let mut aggregator = NoVoteAggregator::new();
             // Add the initial message to the new aggregator
             aggregator.append(initial_no_vote_msg, &self.committee)?;
 
             // Insert the new aggregator into the map
-            self.no_vote_aggregators.insert(no_vote_msg.round, Box::new(aggregator));
+            self.no_vote_aggregators
+                .insert(no_vote_msg.round, Box::new(aggregator));
         }
 
         // Check if we have no vote messages to create a no vote cert to propose next header(as a leader).
@@ -434,7 +457,11 @@ impl Core {
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
         // debug!("Processing {:?}", certificate);
-        info!("Processing certificate {} for round {}", certificate.origin(), certificate.round());
+        info!(
+            "Processing certificate {} for round {}",
+            certificate.origin(),
+            certificate.round()
+        );
 
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
@@ -488,13 +515,15 @@ impl Core {
         Ok(())
     }
 
-    async fn switch_to_fallback_mode(&mut self) {
+    async fn switch_to_fallback_mode(&mut self) {}
+
+    async fn initialize_pisa_protocol(&mut self) {
         let est_r = 1;
-        self.acs_fin_manager.propose(est_r);
+        self.acs_manager.acs_fin.propose(est_r);
 
         // To test if the protocol starts at round 1
         // let handlers = self
-        //     .acs_fin_manager
+        //     .acs_manager.acs_fin
         //     .advance_round(&self.committee, &mut self.network)
         //     .await;
         //
@@ -504,11 +533,15 @@ impl Core {
         //     .extend(handlers);
 
         // Executes behaviour of Pisa protocol in round 0.
-        let bval_message = self.acs_fin_manager.create_bval_message(self.acs_fin_manager.est_r, 2);
-        self.acs_fin_manager.bval_1_sent = true;
+        let bval_message = self
+            .acs_manager
+            .acs_fin
+            .create_bval_message(self.acs_manager.acs_fin.est_r, 2);
+        self.acs_manager.acs_fin.bval_1_sent = true;
 
         let handlers = self
-            .acs_fin_manager
+            .acs_manager
+            .acs_fin
             .broadcast_bval_message(&self.committee, bval_message.clone(), &mut self.network)
             .await;
 
@@ -517,14 +550,17 @@ impl Core {
             .or_insert_with(Vec::new)
             .extend(handlers);
 
-        self.acs_fin_manager.add_bin_value(bval_message.round, bval_message.est);
+        self.acs_manager
+            .acs_fin
+            .add_bin_value(bval_message.round, bval_message.est);
 
         // Broadcasting aux(1,1) if it hasn't been sent yet
-        if !self.acs_fin_manager.aux_sent {
-            let aux_message = self.acs_fin_manager.create_aux_message(1,1);
+        if !self.acs_manager.acs_fin.aux_sent {
+            let aux_message = self.acs_manager.acs_fin.create_aux_message(1, 1);
 
             let handlers = self
-                .acs_fin_manager
+                .acs_manager
+                .acs_fin
                 .broadcast_aux_message(&self.committee, aux_message.clone(), &mut self.network)
                 .await;
 
@@ -533,7 +569,7 @@ impl Core {
                 .or_insert_with(Vec::new)
                 .extend(handlers);
 
-            self.acs_fin_manager.aux_sent = true;
+            self.acs_manager.acs_fin.aux_sent = true;
         }
     }
 
@@ -544,38 +580,32 @@ impl Core {
         let messages: Vec<PrimaryMessage> = self.optimistic_buffer.drain(..).collect();
 
         for message in messages {
-            let result = match message{
-                PrimaryMessage::Header(header) => {
-                    match self.sanitize_header(&header) {
-                        Ok(()) => self.process_header(&header).await,
-                        error => error
-                    }
+            let result = match message {
+                PrimaryMessage::Header(header) => match self.sanitize_header(&header) {
+                    Ok(()) => self.process_header(&header).await,
+                    error => error,
                 },
-                PrimaryMessage::Timeout(timeout) => {
-                    match self.sanitize_timeout(&timeout) {
-                        Ok(()) => self.process_timeout(timeout).await,
-                        error => error
-                    }
+                PrimaryMessage::Timeout(timeout) => match self.sanitize_timeout(&timeout) {
+                    Ok(()) => self.process_timeout(timeout).await,
+                    error => error,
                 },
                 PrimaryMessage::NoVoteMsg(no_vote_msg) => {
                     match self.sanitize_no_vote_msg(&no_vote_msg) {
                         Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
-                        error => error
+                        error => error,
                     }
-                },
-                PrimaryMessage::Vote(vote) => {
-                    match self.sanitize_vote(&vote) {
-                        Ok(()) => self.process_vote(vote).await,
-                        error => error
-                    }
+                }
+                PrimaryMessage::Vote(vote) => match self.sanitize_vote(&vote) {
+                    Ok(()) => self.process_vote(vote).await,
+                    error => error,
                 },
                 PrimaryMessage::Certificate(certificate) => {
                     match self.sanitize_certificate(&certificate) {
                         Ok(()) => self.process_certificate(certificate).await,
-                        error => error
+                        error => error,
                     }
-                },
-                _ => panic!("Unexpected core message")
+                }
+                _ => panic!("Unexpected core message"),
             };
 
             match result {
@@ -615,14 +645,20 @@ impl Core {
             match pisa_bval.est {
                 0 => {
                     // If bval(0, maj_r message has not been broadcast yet, we broadcast it.
-                    if !self.acs_fin_manager.bval_0_sent {
-                        let bval_majr_message = self
-                            .acs_fin_manager
-                            .create_bval_message(pisa_bval.est.clone(), self.acs_fin_manager.maj_r);
+                    if !self.acs_manager.acs_fin.bval_0_sent {
+                        let bval_majr_message = self.acs_manager.acs_fin.create_bval_message(
+                            pisa_bval.est.clone(),
+                            self.acs_manager.acs_fin.maj_r,
+                        );
 
                         let handlers = self
-                            .acs_fin_manager
-                            .broadcast_bval_message(&self.committee, bval_majr_message.clone(), &mut self.network)
+                            .acs_manager
+                            .acs_fin
+                            .broadcast_bval_message(
+                                &self.committee,
+                                bval_majr_message.clone(),
+                                &mut self.network,
+                            )
                             .await;
 
                         self.cancel_handlers
@@ -630,19 +666,25 @@ impl Core {
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
-                        self.acs_fin_manager.bval_0_sent = true;
+                        self.acs_manager.acs_fin.bval_0_sent = true;
                     }
-                },
+                }
                 1 => {
                     // If bval(1, maj_r message has not been broadcast yet, we broadcast it.
-                    if !self.acs_fin_manager.bval_1_sent {
-                        let bval_majr_message = self
-                            .acs_fin_manager
-                            .create_bval_message(pisa_bval.est.clone(), self.acs_fin_manager.maj_r);
+                    if !self.acs_manager.acs_fin.bval_1_sent {
+                        let bval_majr_message = self.acs_manager.acs_fin.create_bval_message(
+                            pisa_bval.est.clone(),
+                            self.acs_manager.acs_fin.maj_r,
+                        );
 
                         let handlers = self
-                            .acs_fin_manager
-                            .broadcast_bval_message(&self.committee, bval_majr_message.clone(), &mut self.network)
+                            .acs_manager
+                            .acs_fin
+                            .broadcast_bval_message(
+                                &self.committee,
+                                bval_majr_message.clone(),
+                                &mut self.network,
+                            )
                             .await;
 
                         self.cancel_handlers
@@ -650,16 +692,23 @@ impl Core {
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
-                        self.acs_fin_manager.bval_1_sent = true;
+                        self.acs_manager.acs_fin.bval_1_sent = true;
                     }
 
                     // We add b to bin values if it is 1 and broadcast aux(1, 1) if we haven't.
-                    self.acs_fin_manager.add_bin_value(pisa_bval.round, pisa_bval.est);
-                    if !self.acs_fin_manager.aux_sent {
-                        let aux_message = self.acs_fin_manager.create_aux_message(1, 1);
+                    self.acs_manager
+                        .acs_fin
+                        .add_bin_value(pisa_bval.round, pisa_bval.est);
+                    if !self.acs_manager.acs_fin.aux_sent {
+                        let aux_message = self.acs_manager.acs_fin.create_aux_message(1, 1);
                         let handlers = self
-                            .acs_fin_manager
-                            .broadcast_aux_message(&self.committee, aux_message.clone(), &mut self.network)
+                            .acs_manager
+                            .acs_fin
+                            .broadcast_aux_message(
+                                &self.committee,
+                                aux_message.clone(),
+                                &mut self.network,
+                            )
                             .await;
 
                         self.cancel_handlers
@@ -667,9 +716,9 @@ impl Core {
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
-                        self.acs_fin_manager.aux_sent = true;
+                        self.acs_manager.acs_fin.aux_sent = true;
                     }
-                },
+                }
                 _ => (),
             }
 
@@ -681,22 +730,30 @@ impl Core {
                 .enough_bvals_for_quorum(&self.committee, pisa_bval.est)
             {
                 info!("Received 2f + 1 bval({}, *) messages", pisa_bval.est);
-                self.acs_fin_manager.add_bin_value(pisa_bval.round, pisa_bval.est);
-                if self.acs_fin_manager.aux_sent {
+                self.acs_manager
+                    .acs_fin
+                    .add_bin_value(pisa_bval.round, pisa_bval.est);
+                if self.acs_manager.acs_fin.aux_sent {
                     let aux_message = self
-                        .acs_fin_manager
+                        .acs_manager
+                        .acs_fin
                         .create_aux_message(pisa_bval.est, pisa_bval.est);
 
                     let handlers = self
-                        .acs_fin_manager
-                        .broadcast_aux_message(&self.committee, aux_message.clone(), &mut self.network)
+                        .acs_manager
+                        .acs_fin
+                        .broadcast_aux_message(
+                            &self.committee,
+                            aux_message.clone(),
+                            &mut self.network,
+                        )
                         .await;
 
                     self.cancel_handlers
                         .entry(aux_message.round)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
-                    self.acs_fin_manager.aux_sent = true;
+                    self.acs_manager.acs_fin.aux_sent = true;
                 }
             }
         }
@@ -705,8 +762,10 @@ impl Core {
 
     async fn process_pillar_bval(&mut self, pillar_bval: PisaBval) -> DagResult<()> {
         debug!("Executing pillar protocol with {:?}", pillar_bval);
-        self.acs_fin_manager.add_maj_value(pillar_bval.round, pillar_bval.maj);
-        let maj_r = self.acs_fin_manager.maj_r;
+        self.acs_manager
+            .acs_fin
+            .add_maj_value(pillar_bval.round, pillar_bval.maj);
+        let maj_r = self.acs_manager.acs_fin.maj_r;
 
         // If we have received f + 1 bval(b, *) messages we can proceed.
         if self
@@ -718,33 +777,32 @@ impl Core {
             info!("Received f + 1 bval({}, *) messages", pillar_bval.est);
             if let Some(message) = match pillar_bval.est {
                 0 => {
-                    if !self.acs_fin_manager.bval_0_sent {
-                        let bval_majr_message = self
-                            .acs_fin_manager
-                            .create_bval_message(0, maj_r);
+                    if !self.acs_manager.acs_fin.bval_0_sent {
+                        let bval_majr_message =
+                            self.acs_manager.acs_fin.create_bval_message(0, maj_r);
 
-                        self.acs_fin_manager.bval_0_sent = true;
+                        self.acs_manager.acs_fin.bval_0_sent = true;
                         Some(bval_majr_message)
                     } else {
                         None
                     }
-                },
+                }
                 1 => {
-                    if !self.acs_fin_manager.bval_1_sent {
-                        let bval_majr_message = self
-                            .acs_fin_manager
-                            .create_bval_message(1, maj_r);
+                    if !self.acs_manager.acs_fin.bval_1_sent {
+                        let bval_majr_message =
+                            self.acs_manager.acs_fin.create_bval_message(1, maj_r);
 
-                        self.acs_fin_manager.bval_1_sent = true;
+                        self.acs_manager.acs_fin.bval_1_sent = true;
                         Some(bval_majr_message)
                     } else {
                         None
                     }
-                },
-                _ => None
+                }
+                _ => None,
             } {
                 let handlers = self
-                    .acs_fin_manager
+                    .acs_manager
+                    .acs_fin
                     .broadcast_bval_message(&self.committee, message.clone(), &mut self.network)
                     .await;
 
@@ -762,26 +820,27 @@ impl Core {
                 .enough_bvals_for_quorum(&self.committee, pillar_bval.est)
             {
                 info!("Received 2f + 1 bval({}, *) messages", pillar_bval.est);
-                self.acs_fin_manager.add_bin_value(pillar_bval.round, pillar_bval.est);
+                self.acs_manager
+                    .acs_fin
+                    .add_bin_value(pillar_bval.round, pillar_bval.est);
 
-                let delta_b = self.acs_fin_manager.delta_b(pillar_bval.est);
+                let delta_b = self.acs_manager.acs_fin.delta_b(pillar_bval.est);
 
                 // if aux(b, *) or aux(not b, *) has not been sent, we can proceed.
-                if !self.acs_fin_manager.aux_0_sent || self.acs_fin_manager.aux_1_sent {
+                if !self.acs_manager.acs_fin.aux_0_sent || self.acs_manager.acs_fin.aux_1_sent {
                     let message = match delta_b {
-                        1 => {
-                            self
-                                .acs_fin_manager
-                                .create_aux_message(pillar_bval.est, pillar_bval.est)
-                        },
-                        _ => {
-                            self
-                                .acs_fin_manager
-                                .create_aux_message(2, pillar_bval.est)
-                        }
+                        1 => self
+                            .acs_manager
+                            .acs_fin
+                            .create_aux_message(pillar_bval.est, pillar_bval.est),
+                        _ => self
+                            .acs_manager
+                            .acs_fin
+                            .create_aux_message(2, pillar_bval.est),
                     };
                     let handlers = self
-                        .acs_fin_manager
+                        .acs_manager
+                        .acs_fin
                         .broadcast_aux_message(&self.committee, message.clone(), &mut self.network)
                         .await;
 
@@ -823,31 +882,37 @@ impl Core {
                 .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
                 .get_vals_round();
 
-            let decide = self.acs_fin_manager.try_decide_round_0(vals_r, &self.committee);
+            let decide = self
+                .acs_manager
+                .acs_fin
+                .try_decide_round_0(vals_r, &self.committee);
 
             // If we are able to decide (V2(vals_r, b) >= (n + f + 1)/2 and b = 1) we broadcast a decide message.
-            if decide && ! self.acs_fin_manager.decided {
+            if decide && !self.acs_manager.acs_fin.decided {
                 // We broadcast the decide message if we haven't already and change to optimistic
                 // mode.
-                let handlers = self.acs_fin_manager.decide(&self.committee, &mut self.network, 1).await;
+                let handlers = self
+                    .acs_manager
+                    .acs_fin
+                    .decide(&self.committee, &mut self.network, 1)
+                    .await;
                 self.cancel_handlers
                     .entry(pisa_aux.round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
                 self.switch_to_optimistic_mode().await;
-            }
-            else {
+            } else {
                 let handlers = self
-                .acs_fin_manager
-                .advance_round(&self.committee, &mut self.network)
-                .await;
+                    .acs_manager
+                    .acs_fin
+                    .advance_round(&self.committee, &mut self.network)
+                    .await;
 
                 self.cancel_handlers
                     .entry(pisa_aux.round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
-
         }
 
         Ok(())
@@ -875,23 +940,30 @@ impl Core {
                 .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
                 .get_avals_round();
 
-            let (decide, b) = self.acs_fin_manager.try_decide(vals_r, avals_r, &self.committee);
+            let (decide, b) = self
+                .acs_manager
+                .acs_fin
+                .try_decide(vals_r, avals_r, &self.committee);
 
-            if decide && !self.acs_fin_manager.decided {
+            if decide && !self.acs_manager.acs_fin.decided {
                 // We broadcast the decide message if we haven't already and chancge to optimistic
                 // mode.
-                 let handlers = self.acs_fin_manager.decide(&self.committee, &mut self.network, b).await;
+                let handlers = self
+                    .acs_manager
+                    .acs_fin
+                    .decide(&self.committee, &mut self.network, b)
+                    .await;
                 self.cancel_handlers
                     .entry(pillar_aux.round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
 
                 self.switch_to_optimistic_mode().await;
-            }
-            else {
+            } else {
                 // If we are not able to decide yet we continue to the next round.
                 let handlers = self
-                    .acs_fin_manager
+                    .acs_manager
+                    .acs_fin
                     .advance_round(&self.committee, &mut self.network)
                     .await;
 
@@ -914,9 +986,10 @@ impl Core {
             .or_insert_with(|| Box::new(PisaDesicionAggregator::new()))
             .append(&self.committee, desicion.clone())
         {
-            if !self.acs_fin_manager.decided {
+            if !self.acs_manager.acs_fin.decided {
                 let handlers = self
-                    .acs_fin_manager
+                    .acs_manager
+                    .acs_fin
                     .decide(&self.committee, &mut self.network, desicion.val)
                     .await;
 
@@ -1005,7 +1078,6 @@ impl Core {
 
         // Verify the vote.
         vote.verify(&self.committee).map_err(DagError::from)
-
     }
 
     fn sanitize_certificate(&mut self, certificate: &Certificate) -> DagResult<()> {
@@ -1041,7 +1113,7 @@ impl Core {
                                 self.optimistic_buffer.push(PrimaryMessage::Header(header));
                                 Ok(())
                             }
-                            
+
                         },
                         PrimaryMessage::Timeout(timeout) => {
                             if self.consensus_mode == ConsensusMode::Optimistic {

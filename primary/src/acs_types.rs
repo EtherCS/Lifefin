@@ -1,16 +1,16 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+use crate::error::{DagError, DagResult};
 use crate::messages::{BinaryValue, Header, PisaAux, PisaBval, PisaDecision};
 use crate::primary::{PrimaryMessage, Round};
-use crate::error::{DagError, DagResult};
 use bytes::Bytes;
-use ed25519_dalek::Digest as _;
-use ed25519_dalek::Sha512;
 use config::Committee;
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
+use ed25519_dalek::Digest as _;
+use ed25519_dalek::Sha512;
 use log::{debug, info};
 use network::{CancelHandler, ReliableSender};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 
@@ -29,7 +29,7 @@ pub struct MetaPoSTBlockData {
 
 impl MetaPoSTBlockData {
     pub async fn new(
-        acs_round: Round,   // the last round agreed by the ACS mode
+        acs_round: Round, // the last round agreed by the ACS mode
         stuck_block: Header,
         signature_service: &mut SignatureService,
         // seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
@@ -65,15 +65,17 @@ impl MetaPoSTBlockData {
         ensure!(self.digest() == self.dg, DagError::InvalidMetaPoSTId);
 
         // Ensure the authority has voting rights.
-        let voting_rights= committee.stake(&self.stuck_block.author);
-        ensure!(voting_rights > 0, DagError::UnknownAuthority(self.stuck_block.author));
+        let voting_rights = committee.stake(&self.stuck_block.author);
+        ensure!(
+            voting_rights > 0,
+            DagError::UnknownAuthority(self.stuck_block.author)
+        );
 
         // Check the signature.
         self.signature
             .verify(&self.dg, &self.stuck_block.author)
             .map_err(DagError::from)
     }
-
 }
 
 impl Hash for MetaPoSTBlockData {
@@ -89,7 +91,7 @@ impl Hash for MetaPoSTBlockData {
 pub struct PoSTBlockVote {
     pub dg: Digest,
     // pub origin: PublicKey,
-    pub voter: PublicKey,    // the signer of this vote
+    pub voter: PublicKey, // the signer of this vote
     pub signature: Signature,
 }
 
@@ -106,8 +108,13 @@ impl PoSTBlockVote {
             voter: *voter,
             signature: Signature::default(),
         };
-        let signature = signature_service.request_signature(post_vote.digest()).await;
-        Self { signature, ..post_vote }
+        let signature = signature_service
+            .request_signature(post_vote.digest())
+            .await;
+        Self {
+            signature,
+            ..post_vote
+        }
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -178,7 +185,7 @@ impl fmt::Debug for CertifiedPoSTBlockData {
         write!(
             f,
             "round: {}, stuck_block: {:?}, signatures: {} }}",
-            self.meta_post.acs_round ,
+            self.meta_post.acs_round,
             self.meta_post.stuck_block,
             self.votes.len()
         )
@@ -186,15 +193,57 @@ impl fmt::Debug for CertifiedPoSTBlockData {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CertifiedPoSTBlockVote {
+    pub certified_post_block: CertifiedPoSTBlockData,
+    pub voter: PublicKey,
+    pub signature: Signature,
+}
+
+impl CertifiedPoSTBlockVote {
+    pub async fn new(
+        certified_post_block: CertifiedPoSTBlockData,
+        voter: PublicKey,
+        signature_service: &mut SignatureService,
+    ) -> Self {
+        let vote = Self {
+            certified_post_block,
+            voter,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(vote.digest()).await;
+        Self { signature, ..vote }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.voter) > 0,
+            DagError::UnknownAuthority(self.voter)
+        );
+
+        // Check the signature.
+        self.signature
+            .verify(&self.digest(), &self.voter)
+            .map_err(DagError::from)
+    }
+}
+
+impl Hash for CertifiedPoSTBlockVote {
+    fn digest(&self) -> Digest {
+        self.certified_post_block.digest()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct MVBAProposal {
     pub author: PublicKey, // the creator of this proposal
-    pub acs_round: Round,        // the last round agreed by the ACS mode
+    pub acs_round: Round,  // the last round agreed by the ACS mode
     pub proposal: MVBA,
     pub signature: Signature, // signature of the creator
 }
 
 impl MVBAProposal {
-    pub async  fn new(
+    pub async fn new(
         author: PublicKey,
         acs_round: Round,
         proposal: MVBA,
@@ -207,12 +256,15 @@ impl MVBAProposal {
             signature: Signature::default(),
         };
         let signature = signature_service.request_signature(proposal.digest()).await;
-        Self { signature, ..proposal }
+        Self {
+            signature,
+            ..proposal
+        }
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the authority has voting rights.
-        let voting_rights= committee.stake(&self.author);
+        let voting_rights = committee.stake(&self.author);
         ensure!(voting_rights > 0, DagError::UnknownAuthority(self.author));
 
         // Check the signature.
@@ -284,7 +336,6 @@ impl Hash for MVBAVote {
         hasher.update(&self.voter);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
-    
 }
 
 impl fmt::Debug for MVBAVote {
@@ -342,6 +393,49 @@ impl fmt::Debug for CertifiedMVBA {
             self.proposal,
             self.votes.len()
         )
+    }
+}
+
+/// For RBC
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CertifiedMVBAVote {
+    pub certified_mvba: CertifiedMVBA,
+    pub voter: PublicKey,
+    pub signature: Signature,
+}
+
+impl CertifiedMVBAVote {
+    pub async fn new_with_signer(
+        certified_mvba: CertifiedMVBA,
+        voter: PublicKey,
+        signature_service: &mut SignatureService,
+    ) -> Self {
+        let vote = Self {
+            certified_mvba,
+            voter,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(vote.digest()).await;
+        Self { signature, ..vote }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.voter) > 0,
+            DagError::UnknownAuthority(self.voter)
+        );
+
+        // Check the signature.
+        self.signature
+            .verify(&self.digest(), &self.voter)
+            .map_err(DagError::from)
+    }
+}
+
+impl Hash for CertifiedMVBAVote {
+    fn digest(&self) -> Digest {
+        self.certified_mvba.digest()
     }
 }
 

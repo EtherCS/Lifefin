@@ -145,6 +145,11 @@ pub struct Committee {
 impl Import for Committee {}
 
 impl Committee {
+    /// Returns the index of a specific authority.
+    pub fn author_index(&self, name: &PublicKey) -> Option<usize> {
+        self.authorities.keys().position(|x| x == name)
+    }
+
     /// Returns the number of authorities.
     pub fn size(&self) -> usize {
         self.authorities.len()

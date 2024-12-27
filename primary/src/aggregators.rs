@@ -1,6 +1,12 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+use crate::acs_types::{
+    CertifiedMVBAVote, CertifiedPoSTBlockVote, MVBAProposal, MetaPoSTBlockData,
+};
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Timeout, TimeoutCert, Vote, NoVoteMsg, NoVoteCert, PisaBval, PisaAux, PisaDecision, BinaryValue};
+use crate::messages::{
+    BinaryValue, Certificate, Header, NoVoteCert, NoVoteMsg, PisaAux, PisaBval, PisaDecision,
+    Timeout, TimeoutCert, Vote,
+};
 use config::{Committee, Stake};
 use crypto::{PublicKey, Signature};
 use std::collections::HashSet;
@@ -168,6 +174,170 @@ impl NoVoteAggregator {
     }
 }
 
+/// store the post blocks after RBC
+pub struct PoSTAggregator {
+    weight: Stake,
+    post_blocks: Vec<MetaPoSTBlockData>,
+    used: HashSet<PublicKey>,
+}
+impl PoSTAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            post_blocks: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        post_block: MetaPoSTBlockData,
+        committee: &Committee,
+    ) -> DagResult<Option<Vec<MetaPoSTBlockData>>> {
+        let author = post_block.stuck_block.author;
+
+        // Ensure it is the first time this authority sends a MVBAProposal.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.post_blocks.push(post_block);
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            // self.weight = 0;
+            return Ok(Some(self.post_blocks.drain(..).collect()));
+        }
+        Ok(None)
+    }
+
+    pub fn reset(&mut self) {
+        self.weight = 0;
+        self.post_blocks.clear();
+        self.used.clear();
+    }
+}
+
+// store the messages from 2nd phase of RBC for PoST blocks
+pub struct PoSTVoteAggregator {
+    weight: Stake,
+    post_votes: Vec<CertifiedPoSTBlockVote>,
+    used: HashSet<PublicKey>,
+}
+
+impl PoSTVoteAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            post_votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        post_vote: CertifiedPoSTBlockVote,
+        committee: &Committee,
+    ) -> DagResult<Option<Vec<CertifiedPoSTBlockVote>>> {
+        let author = post_vote.voter;
+
+        // Ensure it is the first time this authority sends a MVBAVote.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.post_votes.push(post_vote);
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            // self.weight = 0;
+            return Ok(Some(self.post_votes.clone()));
+        }
+        Ok(None)
+    }
+
+    pub fn reset(&mut self) {
+        self.weight = 0;
+        self.post_votes.clear();
+        self.used.clear();
+    }
+}
+
+/// store the MVBA proposals after RBC
+pub struct MVBAAggregator {
+    weight: Stake,
+    mvba_proposals: Vec<MVBAProposal>,
+    used: HashSet<PublicKey>,
+}
+impl MVBAAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            mvba_proposals: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        mvba_proposal: MVBAProposal,
+        committee: &Committee,
+    ) -> DagResult<Option<Vec<MVBAProposal>>> {
+        let author = mvba_proposal.author;
+
+        // Ensure it is the first time this authority sends a MVBAProposal.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.mvba_proposals.push(mvba_proposal);
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            // self.weight = 0;
+            return Ok(Some(self.mvba_proposals.drain(..).collect()));
+        }
+        Ok(None)
+    }
+
+    pub fn reset(&mut self) {
+        self.weight = 0;
+        self.mvba_proposals.clear();
+        self.used.clear();
+    }
+}
+
+pub struct MVBAVoteAggregator {
+    weight: Stake,
+    mvba_votes: Vec<CertifiedMVBAVote>,
+    used: HashSet<PublicKey>,
+}
+
+impl MVBAVoteAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            mvba_votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        mvba_vote: CertifiedMVBAVote,
+        committee: &Committee,
+    ) -> DagResult<Option<Vec<CertifiedMVBAVote>>> {
+        let author = mvba_vote.voter;
+
+        // Ensure it is the first time this authority sends a MVBAVote.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.mvba_votes.push(mvba_vote);
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            // self.weight = 0;
+            return Ok(Some(self.mvba_votes.clone()));
+        }
+        Ok(None)
+    }
+
+    pub fn reset(&mut self) {
+        self.weight = 0;
+        self.mvba_votes.clear();
+        self.used.clear();
+    }
+}
 /// Aggregates PisaBval messages for a particular round into a certification.
 pub struct PisaBvalAggregator {
     weight0: Stake,
@@ -188,11 +358,7 @@ impl PisaBvalAggregator {
         }
     }
 
-    pub fn append(
-        &mut self,
-        committee: &Committee,
-        pisa_bval: PisaBval
-    ) -> bool {
+    pub fn append(&mut self, committee: &Committee, pisa_bval: PisaBval) -> bool {
         let author = pisa_bval.author;
 
         match pisa_bval.est {
@@ -231,7 +397,6 @@ impl PisaBvalAggregator {
     }
 }
 
-
 /// Aggregates PisaAux messages for a particular round into a certification.
 pub struct PisaAuxAggregator {
     weight: Stake,
@@ -248,11 +413,7 @@ impl PisaAuxAggregator {
         }
     }
 
-    pub fn append(
-        &mut self,
-        committee: &Committee,
-        pisa_aux: PisaAux
-    ) -> bool {
+    pub fn append(&mut self, committee: &Committee, pisa_aux: PisaAux) -> bool {
         let author = pisa_aux.author;
 
         // Ensure it is the first time this authority sends a PisaAux message.
@@ -305,11 +466,7 @@ impl PisaDesicionAggregator {
         }
     }
 
-    pub fn append(
-        &mut self,
-        committee: &Committee,
-        pisa_decision: PisaDecision
-    ) -> bool {
+    pub fn append(&mut self, committee: &Committee, pisa_decision: PisaDecision) -> bool {
         let author = pisa_decision.author;
 
         match pisa_decision.val {
@@ -323,7 +480,7 @@ impl PisaDesicionAggregator {
                 self.weight0 += committee.stake(&author);
 
                 self.weight0 >= committee.quorum_threshold()
-            },
+            }
             1 => {
                 // Ensure it is the first time this authority sends a PisaDecision message.
                 if !self.used1.insert(author) {
@@ -334,7 +491,7 @@ impl PisaDesicionAggregator {
                 self.weight1 += committee.stake(&author);
 
                 self.weight1 >= committee.quorum_threshold()
-            },
+            }
             _ => return false,
         }
     }
