@@ -14,12 +14,12 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 
-pub type MVBARoundNumber = u64;
-pub type ABARoundNumber = u64;
+pub type MVBARoundNumber = Round;
+pub type ABARoundNumber = Round;
 // pub type BinaryValue = u64; // b=0, b=1, b=2 (None)
 pub type MVBA = u128;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct MetaPoSTBlockData {
     pub acs_round: Round,
     pub stuck_block: Header,
@@ -47,14 +47,6 @@ impl MetaPoSTBlockData {
             signature,
             ..meta_post
         }
-    }
-
-    pub fn acs_round(&self) -> Round {
-        self.acs_round
-    }
-
-    pub fn stuck_block(&self) -> &Header {
-        &self.stuck_block
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -87,11 +79,22 @@ impl Hash for MetaPoSTBlockData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl fmt::Debug for MetaPoSTBlockData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "round: {}, stuck_block: {:?} }}",
+            self.acs_round, self.stuck_block
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PoSTBlockVote {
     pub dg: Digest,
-    // pub origin: PublicKey,
-    pub voter: PublicKey, // the signer of this vote
+    pub acs_round: Round,
+    pub origin: PublicKey, // the creator of this block
+    pub voter: PublicKey,  // the signer of this vote
     pub signature: Signature,
 }
 
@@ -103,14 +106,13 @@ impl PoSTBlockVote {
     ) -> Self {
         let post_vote = Self {
             dg: meta_post.dg.clone(),
-            // round: header.round,
-            // origin: meta_post.author,
+            acs_round: meta_post.acs_round,
+            origin: meta_post.stuck_block.author,
             voter: *voter,
             signature: Signature::default(),
         };
-        let signature = signature_service
-            .request_signature(post_vote.digest())
-            .await;
+        let digest = post_vote.digest();
+        let signature = signature_service.request_signature(digest).await;
         Self {
             signature,
             ..post_vote
@@ -135,12 +137,21 @@ impl Hash for PoSTBlockVote {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.dg);
-        // hasher.update(self.round.to_le_bytes());
-        // hasher.update(&self.origin);
+        hasher.update(self.acs_round.to_le_bytes());
+        hasher.update(&self.origin);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
+impl fmt::Debug for PoSTBlockVote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "PoSTBlockVote {{ dg: {:?}, acs_round: {}, voter: {} }}",
+            self.dg, self.acs_round, self.voter,
+        )
+    }
+}
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct CertifiedPoSTBlockData {
     pub meta_post: MetaPoSTBlockData, // the block I proposed at the stuck round
@@ -170,12 +181,22 @@ impl CertifiedPoSTBlockData {
         // Check the signatures.
         Signature::verify_batch(&self.digest(), &self.votes).map_err(DagError::from)
     }
+
+    pub fn round(&self) -> Round {
+        self.meta_post.acs_round
+    }
+
+    pub fn origin(&self) -> PublicKey {
+        self.meta_post.stuck_block.author
+    }
 }
 
 impl Hash for CertifiedPoSTBlockData {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.meta_post.dg);
+        hasher.update(self.round().to_le_bytes());
+        hasher.update(&self.origin());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -184,7 +205,7 @@ impl fmt::Debug for CertifiedPoSTBlockData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "round: {}, stuck_block: {:?}, signatures: {} }}",
+            "round: {}, stuck_block: {:?}, signature number: {} }}",
             self.meta_post.acs_round,
             self.meta_post.stuck_block,
             self.votes.len()
@@ -192,6 +213,7 @@ impl fmt::Debug for CertifiedPoSTBlockData {
     }
 }
 
+// the message of the 2nd phase of RBC for PoST blocks
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct CertifiedPoSTBlockVote {
     pub certified_post_block: CertifiedPoSTBlockData,
@@ -230,7 +252,19 @@ impl CertifiedPoSTBlockVote {
 
 impl Hash for CertifiedPoSTBlockVote {
     fn digest(&self) -> Digest {
-        self.certified_post_block.digest()
+        let mut hasher = Sha512::new();
+        hasher.update(&self.certified_post_block.digest());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for CertifiedPoSTBlockVote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CertifiedPoSTBlockVote {{ certified_post_block: {:?}, voter: {} }}",
+            self.certified_post_block, self.voter,
+        )
     }
 }
 
@@ -246,9 +280,19 @@ impl MVBAProposal {
     pub async fn new(
         author: PublicKey,
         acs_round: Round,
-        proposal: MVBA,
+        meta_post_blocks: Vec<MetaPoSTBlockData>,
+        committee: &Committee,
         signature_service: &mut SignatureService,
     ) -> Self {
+        // get author indices of the meta post blocks
+        let author_indices: Vec<usize> = meta_post_blocks
+            .iter()
+            .filter_map(|meta_post| committee.author_index(&meta_post.stuck_block.author))
+            .collect();
+        let mut proposal = 0;
+        for (_, author_index) in author_indices.iter().enumerate() {
+            proposal |= 1 << author_index;
+        }
         let proposal = Self {
             author,
             acs_round,
@@ -301,7 +345,7 @@ pub struct MVBAVote {
 }
 
 impl MVBAVote {
-    pub async fn new_with_signer(
+    pub async fn new(
         mvba_proposal: MVBAProposal,
         voter: PublicKey,
         signature_service: &mut SignatureService,
@@ -333,7 +377,6 @@ impl Hash for MVBAVote {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.mvba_proposal.digest());
-        hasher.update(&self.voter);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -381,7 +424,9 @@ impl CertifiedMVBA {
 
 impl Hash for CertifiedMVBA {
     fn digest(&self) -> Digest {
-        self.proposal.digest()
+        let mut hasher = Sha512::new();
+        hasher.update(&self.proposal.digest());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
@@ -389,7 +434,7 @@ impl fmt::Debug for CertifiedMVBA {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "CertifiedMVBA {{ proposal: {:?}, signatures: {} }}",
+            "CertifiedMVBA {{ proposal: {:?}, signature number: {} }}",
             self.proposal,
             self.votes.len()
         )
@@ -405,7 +450,7 @@ pub struct CertifiedMVBAVote {
 }
 
 impl CertifiedMVBAVote {
-    pub async fn new_with_signer(
+    pub async fn new(
         certified_mvba: CertifiedMVBA,
         voter: PublicKey,
         signature_service: &mut SignatureService,
@@ -435,7 +480,79 @@ impl CertifiedMVBAVote {
 
 impl Hash for CertifiedMVBAVote {
     fn digest(&self) -> Digest {
-        self.certified_mvba.digest()
+        let mut hasher = Sha512::new();
+        hasher.update(&self.certified_mvba.digest());
+        // hasher.update(&self.voter);
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for CertifiedMVBAVote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CertifiedMVBAVote {{ certified_mvba: {:?}, voter: {} }}",
+            self.certified_mvba, self.voter,
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ACSOutput {
+    pub acs_round: Round,
+    pub vertices: Vec<CertifiedPoSTBlockData>,
+}
+
+impl ACSOutput {
+    pub fn new(acs_round: Round, vertices: Vec<CertifiedPoSTBlockData>) -> Self {
+        Self {
+            acs_round,
+            vertices,
+        }
+    }
+
+    pub fn acs_round(&self) -> Round {
+        self.acs_round
+    }
+
+    pub fn new_leader_block(&self, committee: Committee) -> CertifiedPoSTBlockData {
+        // collect the blocks with the highest round
+        let highest_blocks: Vec<&CertifiedPoSTBlockData> = self
+            .vertices
+            .iter()
+            .filter(|block| block.round() == self.acs_round)
+            .collect();
+        let mut leader_block = highest_blocks[0].clone();
+        let pre_defined_leader = committee.leader(self.acs_round as usize);
+        for block in highest_blocks.iter() {
+            if block.origin() == pre_defined_leader {
+                leader_block = (*block).clone();
+                break;
+            }
+        }
+        leader_block
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FINMVBAView {
+    pub mvba_round: MVBARoundNumber, // the (FIN) mvba round number
+    pub aba_round: ABARoundNumber,   // the (Pisa) aba round number
+}
+
+impl FINMVBAView {
+    pub fn new() -> Self {
+        Self {
+            mvba_round: 0,
+            aba_round: 0,
+        }
+    }
+
+    pub fn new_with_rounds(mvba_round: MVBARoundNumber, aba_round: ABARoundNumber) -> Self {
+        Self {
+            mvba_round,
+            aba_round,
+        }
     }
 }
 
@@ -444,6 +561,8 @@ pub struct ACSFin {
     name: PublicKey,
     /// The round number
     round: Round,
+    /// the current MVBA view
+    pub mvba_view: FINMVBAView,
     /// est_r value for round r
     pub est_r: BinaryValue,
     /// maj_r value for round r
@@ -471,6 +590,7 @@ impl ACSFin {
         Self {
             name,
             round: 0,
+            mvba_view: FINMVBAView::new(),
             est_r: 0,
             maj_r: 0,
             bin_values: HashMap::new(),
@@ -768,5 +888,19 @@ impl ACSFin {
             delta_b = 1;
         }
         delta_b
+    }
+
+    pub fn reset(&mut self) {
+        self.round = 0;
+        self.est_r = 0;
+        self.maj_r = 0;
+        self.bin_values.clear();
+        self.majs.clear();
+        self.aux_sent = false;
+        self.aux_1_sent = false;
+        self.aux_0_sent = false;
+        self.bval_0_sent = false;
+        self.bval_1_sent = false;
+        self.decided = false;
     }
 }

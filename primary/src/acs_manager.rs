@@ -1,12 +1,18 @@
-use crate::aggregators::{MVBAAggregator, MVBAVoteAggregator, PoSTAggregator, PoSTVoteAggregator};
+use crate::{
+    aggregators::{
+        CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator, MVBAAggregator,
+        MVBAProposalVoteAggregator, PoSTAggregator, PoSTVoteAggregator,
+    },
+    Header,
+};
 use std::collections::HashMap;
 
 use crate::{
-    acs_types::{ACSFin, MetaPoSTBlockData},
+    acs_types::{ACSFin, MVBAProposal, MetaPoSTBlockData},
     primary::Round,
 };
 use config::Committee;
-use crypto::PublicKey;
+use crypto::{PublicKey, SignatureService};
 
 pub type AuthorIndex = usize;
 
@@ -16,23 +22,70 @@ pub struct ACSManager {
     committee: Committee,
     pub last_acs_round: Round, // the last round decided by ACS
     pub acs_fin: ACSFin,
-    pub post_vote_aggregators: HashMap<AuthorIndex, PoSTVoteAggregator>, // store the votes from 2nd phase of RBC for PoST blocks
-    pub post_block_aggregator: PoSTAggregator, // store the post blocks after RBC
-    pub mvba_vote_aggregators: HashMap<PublicKey, MVBAVoteAggregator>, // store the msgs from 2nd phase of RBC for MVBA proposals
-    pub mvba_proposal_aggregator: MVBAAggregator, // store the MVBA proposals after RBC
+    /// The last seen PoST blocks from other primaries
+    pub last_seen_post_blocks: HashMap<PublicKey, MetaPoSTBlockData>,
+    /// The last seen MVBA proposals from other primaries
+    pub last_seen_mvba_proposals: HashMap<PublicKey, MVBAProposal>,
+    /// The current own post block (for which we are waiting votes).
+    pub current_post_block: MetaPoSTBlockData,
+    /// Aggregates post block votes into own certified post block.
+    pub meta_post_vote_aggregator: PoSTVoteAggregator,
+    /// Aggregates mvba proposal votes from other primaries.
+    pub mvba_proposal_vote_aggregator: MVBAProposalVoteAggregator,
+    /// store the votes from 2nd phase of RBC for PoST blocks
+    pub post_vote_aggregators: HashMap<PublicKey, CertifiedPoSTVoteAggregator>,
+    /// store the post blocks after RBC
+    pub post_block_aggregator: PoSTAggregator,
+    /// store the msgs from 2nd phase of RBC for MVBA proposals
+    pub mvba_vote_aggregators: HashMap<PublicKey, CertifiedMVBAVoteAggregator>,
+    /// store the MVBA proposals after RBC
+    pub mvba_proposal_aggregator: MVBAAggregator,
+    signature_service: SignatureService,
 }
 
 impl ACSManager {
-    pub fn new(name: PublicKey, committee: Committee) -> Self {
+    pub fn new(name: PublicKey, committee: Committee, signature_service: SignatureService) -> Self {
         ACSManager {
             name,
             committee,
             last_acs_round: 0,
             acs_fin: ACSFin::spawn(name),
+            last_seen_post_blocks: HashMap::new(),
+            last_seen_mvba_proposals: HashMap::new(),
+            current_post_block: MetaPoSTBlockData::default(),
+            meta_post_vote_aggregator: PoSTVoteAggregator::new(),
+            mvba_proposal_vote_aggregator: MVBAProposalVoteAggregator::new(),
             post_vote_aggregators: HashMap::new(),
             post_block_aggregator: PoSTAggregator::new(),
             mvba_vote_aggregators: HashMap::new(),
             mvba_proposal_aggregator: MVBAAggregator::new(),
+            signature_service,
         }
+    }
+
+    pub async fn create_own_post_block(&mut self, header: Header) -> MetaPoSTBlockData {
+        let new_post =
+            MetaPoSTBlockData::new(self.last_acs_round, header, &mut self.signature_service).await;
+        new_post
+    }
+
+    pub fn reset(&mut self, acs_round: Round) {
+        self.last_acs_round = acs_round;
+        self.acs_fin.reset();
+        self.last_seen_post_blocks.clear();
+        self.last_seen_mvba_proposals.clear();
+        // self.current_post_block = MetaPoSTBlockData::default();
+        self.meta_post_vote_aggregator.reset();
+        self.mvba_proposal_vote_aggregator.reset();
+        // self.post_vote_aggregators.clear();
+        for (_, aggregator) in self.post_vote_aggregators.iter_mut() {
+            aggregator.reset();
+        }
+        self.post_block_aggregator.reset();
+        // self.mvba_vote_aggregators.clear();
+        for (_, aggregator) in self.mvba_vote_aggregators.iter_mut() {
+            aggregator.reset();
+        }
+        self.mvba_proposal_aggregator.reset();
     }
 }

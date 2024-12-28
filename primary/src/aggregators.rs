@@ -1,6 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::acs_types::{
-    CertifiedMVBAVote, CertifiedPoSTBlockVote, MVBAProposal, MetaPoSTBlockData,
+    CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote, MVBAProposal,
+    MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
 };
 use crate::error::{DagError, DagResult};
 use crate::messages::{
@@ -174,6 +175,105 @@ impl NoVoteAggregator {
     }
 }
 
+pub struct PoSTVoteAggregator {
+    weight: Stake,
+    votes: Vec<(PublicKey, Signature)>,
+    used: HashSet<PublicKey>,
+}
+
+impl PoSTVoteAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        vote: PoSTBlockVote,
+        committee: &Committee,
+        meta_post: &MetaPoSTBlockData,
+    ) -> DagResult<Option<CertifiedPoSTBlockData>> {
+        // if we have already reached quorum, we don't need to add more blocks
+        if self.weight >= committee.quorum_threshold() {
+            return Ok(None);
+        }
+
+        let author = vote.voter;
+        // Ensure it is the first time this authority votes.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.votes.push((author, vote.signature));
+        self.weight += committee.stake(&author);
+
+        if self.weight >= committee.quorum_threshold() {
+            // self.weight = 0;
+            return Ok(Some(CertifiedPoSTBlockData {
+                meta_post: meta_post.clone(),
+                votes: self.votes.clone(),
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn reset(&mut self) {
+        self.weight = 0;
+        self.votes.clear();
+        self.used.clear();
+    }
+}
+
+pub struct MVBAProposalVoteAggregator {
+    weight: Stake,
+    votes: Vec<(PublicKey, Signature)>,
+    used: HashSet<PublicKey>,
+}
+
+impl MVBAProposalVoteAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        vote: MVBAVote,
+        committee: &Committee,
+        mvba_proposal: &MVBAProposal,
+    ) -> DagResult<Option<CertifiedMVBA>> {
+        // if we have already reached quorum, we don't need to add more blocks
+        if self.weight >= committee.quorum_threshold() {
+            return Ok(None);
+        }
+
+        let author = vote.voter;
+        // Ensure it is the first time this authority votes.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.votes.push((author, vote.signature));
+        self.weight += committee.stake(&author);
+
+        if self.weight >= committee.quorum_threshold() {
+            // self.weight = 0;
+            return Ok(Some(CertifiedMVBA {
+                proposal: mvba_proposal.clone(),
+                votes: self.votes.clone(),
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn reset(&mut self) {
+        self.weight = 0;
+        self.votes.clear();
+        self.used.clear();
+    }
+}
 /// store the post blocks after RBC
 pub struct PoSTAggregator {
     weight: Stake,
@@ -194,8 +294,12 @@ impl PoSTAggregator {
         post_block: MetaPoSTBlockData,
         committee: &Committee,
     ) -> DagResult<Option<Vec<MetaPoSTBlockData>>> {
-        let author = post_block.stuck_block.author;
+        // if we have already reached quorum, we don't need to add more blocks
+        if self.weight >= committee.quorum_threshold() {
+            return Ok(None);
+        }
 
+        let author = post_block.stuck_block.author;
         // Ensure it is the first time this authority sends a MVBAProposal.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
@@ -203,9 +307,13 @@ impl PoSTAggregator {
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             // self.weight = 0;
-            return Ok(Some(self.post_blocks.drain(..).collect()));
+            return Ok(Some(self.post_blocks.clone()));
         }
         Ok(None)
+    }
+
+    pub fn contains(&self, author: &PublicKey) -> bool {
+        self.used.contains(author)
     }
 
     pub fn reset(&mut self) {
@@ -216,13 +324,13 @@ impl PoSTAggregator {
 }
 
 // store the messages from 2nd phase of RBC for PoST blocks
-pub struct PoSTVoteAggregator {
+pub struct CertifiedPoSTVoteAggregator {
     weight: Stake,
     post_votes: Vec<CertifiedPoSTBlockVote>,
     used: HashSet<PublicKey>,
 }
 
-impl PoSTVoteAggregator {
+impl CertifiedPoSTVoteAggregator {
     pub fn new() -> Self {
         Self {
             weight: 0,
@@ -235,17 +343,19 @@ impl PoSTVoteAggregator {
         &mut self,
         post_vote: CertifiedPoSTBlockVote,
         committee: &Committee,
-    ) -> DagResult<Option<Vec<CertifiedPoSTBlockVote>>> {
+    ) -> DagResult<Option<CertifiedPoSTBlockData>> {
         let author = post_vote.voter;
-
         // Ensure it is the first time this authority sends a MVBAVote.
-        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+        if !self.used.insert(author) {
+            return Ok(None);
+        }
+        // ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
-        self.post_votes.push(post_vote);
+        self.post_votes.push(post_vote.clone());
         self.weight += committee.stake(&author);
-        if self.weight >= committee.quorum_threshold() {
+        if self.weight >= committee.reliable_broadcast_threshold() {
             // self.weight = 0;
-            return Ok(Some(self.post_votes.clone()));
+            return Ok(Some(post_vote.certified_post_block.clone()));
         }
         Ok(None)
     }
@@ -277,8 +387,12 @@ impl MVBAAggregator {
         mvba_proposal: MVBAProposal,
         committee: &Committee,
     ) -> DagResult<Option<Vec<MVBAProposal>>> {
-        let author = mvba_proposal.author;
+        // if we have already reached quorum, we don't need to add more blocks
+        if self.weight >= committee.quorum_threshold() {
+            return Ok(None);
+        }
 
+        let author = mvba_proposal.author;
         // Ensure it is the first time this authority sends a MVBAProposal.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
@@ -291,6 +405,10 @@ impl MVBAAggregator {
         Ok(None)
     }
 
+    pub fn contains(&self, author: &PublicKey) -> bool {
+        self.used.contains(author)
+    }
+
     pub fn reset(&mut self) {
         self.weight = 0;
         self.mvba_proposals.clear();
@@ -298,13 +416,13 @@ impl MVBAAggregator {
     }
 }
 
-pub struct MVBAVoteAggregator {
+pub struct CertifiedMVBAVoteAggregator {
     weight: Stake,
     mvba_votes: Vec<CertifiedMVBAVote>,
     used: HashSet<PublicKey>,
 }
 
-impl MVBAVoteAggregator {
+impl CertifiedMVBAVoteAggregator {
     pub fn new() -> Self {
         Self {
             weight: 0,
@@ -317,17 +435,20 @@ impl MVBAVoteAggregator {
         &mut self,
         mvba_vote: CertifiedMVBAVote,
         committee: &Committee,
-    ) -> DagResult<Option<Vec<CertifiedMVBAVote>>> {
+    ) -> DagResult<Option<CertifiedMVBA>> {
         let author = mvba_vote.voter;
 
         // Ensure it is the first time this authority sends a MVBAVote.
-        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+        if !self.used.insert(author) {
+            return Ok(None);
+        }
+        // ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
-        self.mvba_votes.push(mvba_vote);
+        self.mvba_votes.push(mvba_vote.clone());
         self.weight += committee.stake(&author);
-        if self.weight >= committee.quorum_threshold() {
+        if self.weight >= committee.reliable_broadcast_threshold() {
             // self.weight = 0;
-            return Ok(Some(self.mvba_votes.clone()));
+            return Ok(Some(mvba_vote.certified_mvba.clone()));
         }
         Ok(None)
     }

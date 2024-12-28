@@ -1,4 +1,7 @@
-use crate::acs_types::{MetaPoSTBlockData, PoSTBlockVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote};
+use crate::acs_types::{
+    CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote, MVBAProposal,
+    MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
+};
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::certificate_waiter::CertificateWaiter;
 use crate::core::Core;
@@ -6,7 +9,9 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, NoVoteMsg, Timeout, Vote, PisaBval, PisaAux, PisaDecision};
+use crate::messages::{
+    Certificate, Header, NoVoteMsg, PisaAux, PisaBval, PisaDecision, Timeout, Vote,
+};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -42,6 +47,10 @@ pub enum PrimaryMessage {
     PoSTBlockVote(PoSTBlockVote),
     CertifiedPoSTBlockData(CertifiedPoSTBlockData),
     CertifiedPoSTBlockVote(CertifiedPoSTBlockVote),
+    MVBAProposal(MVBAProposal),
+    MVBAVote(MVBAVote),
+    CertifiedMVBA(CertifiedMVBA),
+    CertifiedMVBAVote(CertifiedMVBAVote),
     PisaBval(PisaBval),
     PisaAux(PisaAux),
     PisaDecision(PisaDecision),
@@ -301,4 +310,3 @@ impl MessageHandler for WorkerReceiverHandler {
         Ok(())
     }
 }
-

@@ -60,6 +60,27 @@ pub enum DagError {
     #[error("Message {0} (round {1}) too old")]
     TooOld(Digest, Round),
 
+    #[error("Message {0} (round {1}) too old compared to {2}")]
+    PoSTTooOld(Digest, Round, Round),
+
+    #[error("Equivocated PoST")]
+    EquivocationPoST,
+
+    #[error("Equivocated MVBA proposal")]
+    EquivocationMVBAProposal,
+
+    #[error("Received a PoST containing an old header (round {0}), expected round > {1}")]
+    HeaderTooOld(Round, Round),
+
+    #[error("Received unexpected post vote for post block {0}")]
+    UnexpectedPoSTVote(Digest),
+
+    #[error("Received unexpected mvba vote for mvba proposal {0}")]
+    UnexpectedMVBAVote(Digest),
+
+    #[error("This is not my mvba proposal")]
+    NotMyMVBAProposal,
+
     #[error("Received invalid message for fallback mode")]
     InvalidFallbackMessage,
 }

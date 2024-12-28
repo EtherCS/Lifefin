@@ -1,9 +1,13 @@
 use crate::acs_manager::ACSManager;
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::acs_types::ACSFin;
+use crate::acs_types::{
+    CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote, MVBAProposal,
+    MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
+};
 use crate::aggregators::{
-    CertificatesAggregator, NoVoteAggregator, PisaAuxAggregator, PisaBvalAggregator,
-    PisaDesicionAggregator, TimeoutAggregator, VotesAggregator,
+    CertificatesAggregator, CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator,
+    NoVoteAggregator, PisaAuxAggregator, PisaBvalAggregator, PisaDesicionAggregator,
+    TimeoutAggregator, VotesAggregator,
 };
 use crate::error::{DagError, DagResult};
 use crate::messages::{
@@ -44,14 +48,6 @@ pub struct Core {
     consensus_round: Arc<AtomicU64>,
     /// The depth of the garbage collector.
     gc_depth: Round,
-
-    /// The consensus mode the node is running in.
-    consensus_mode: ConsensusMode,
-    /// The ACSFin protocol manager.
-    acs_manager: ACSManager,
-    /// Buffer for optimistic messages received in fallback mode.
-    optimistic_buffer: Vec<PrimaryMessage>,
-
     /// Receiver for dag messages (headers, timeouts, votes, certificates).
     rx_primaries: Receiver<PrimaryMessage>,
     /// Receives loopback headers from the `HeaderWaiter`.
@@ -74,11 +70,8 @@ pub struct Core {
     tx_no_vote_cert: Sender<(NoVoteCert, Round)>,
     /// Send a the header that has voted for the prev leader to the `Consensus` logic.
     tx_consensus_header: Sender<Header>,
-
     /// The last garbage collected round.
     gc_round: Round,
-    /// The round for changing to fallback mode.
-    fallback_round: Round,
     /// The authors of the last voted headers.
     last_voted: HashMap<Round, HashSet<PublicKey>>,
     /// The set of headers we are currently processing.
@@ -89,12 +82,6 @@ pub struct Core {
     votes_aggregator: VotesAggregator,
     /// Aggregates certificates to use as parents for new headers.
     certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>,
-    /// Aggregator of Bval messages
-    pisa_bval_aggregators: HashMap<Round, Box<PisaBvalAggregator>>,
-    /// Aggregator of Aux messages
-    pisa_aux_aggregators: HashMap<Round, Box<PisaAuxAggregator>>,
-    /// Aggregator of the desicion messages of other primaries
-    pisa_descion_aggregators: HashMap<Round, Box<PisaDesicionAggregator>>,
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
@@ -103,6 +90,27 @@ pub struct Core {
     timeouts_aggregators: HashMap<Round, Box<TimeoutAggregator>>,
     /// Aggregates no vote messages to use for sending no vote certificates.
     no_vote_aggregators: HashMap<Round, Box<NoVoteAggregator>>,
+
+    // ACS data
+    /// The consensus mode the node is running in.
+    consensus_mode: ConsensusMode,
+    /// The ACSFin protocol manager.
+    acs_manager: ACSManager,
+    /// Buffer for optimistic messages received in fallback mode.
+    optimistic_buffer: Vec<PrimaryMessage>,
+    /// Aggregator of Bval messages
+    pisa_bval_aggregators: HashMap<Round, Box<PisaBvalAggregator>>,
+    /// Aggregator of Aux messages
+    pisa_aux_aggregators: HashMap<Round, Box<PisaAuxAggregator>>,
+    /// Aggregator of the desicion messages of other primaries
+    pisa_descion_aggregators: HashMap<Round, Box<PisaDesicionAggregator>>,
+    /// The last seen headers from other primaries, used to verify the PoST blocks
+    last_seen_headers: HashMap<PublicKey, Header>,
+    /// (test only) The round for changing to fallback mode.
+    fallback_round: Round,
+    /// Timeout (seconds) for triggering ACS
+    acs_timeout: u64,
+    // last_acs_output:
 }
 
 impl Core {
@@ -115,7 +123,6 @@ impl Core {
         signature_service: SignatureService,
         consensus_round: Arc<AtomicU64>,
         gc_depth: Round,
-        fallback_round: Round,
         rx_primaries: Receiver<PrimaryMessage>,
         rx_header_waiter: Receiver<Header>,
         rx_certificate_waiter: Receiver<Certificate>,
@@ -127,6 +134,8 @@ impl Core {
         tx_timeout_cert: Sender<(TimeoutCert, Round)>,
         tx_no_vote_cert: Sender<(NoVoteCert, Round)>,
         tx_consensus_header: Sender<Header>,
+        fallback_round: Round,
+        acs_timeout: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -134,12 +143,8 @@ impl Core {
                 committee: committee.clone(),
                 store,
                 synchronizer,
-                signature_service,
-                consensus_round,
+                signature_service: signature_service.clone(),
                 gc_depth,
-                consensus_mode: ConsensusMode::Optimistic,
-                acs_manager: ACSManager::new(name, committee.clone()),
-                optimistic_buffer: Vec::new(),
                 rx_primaries,
                 rx_header_waiter,
                 rx_certificate_waiter,
@@ -158,13 +163,19 @@ impl Core {
                 current_header: Header::default(),
                 votes_aggregator: VotesAggregator::new(),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                pisa_bval_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                pisa_aux_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                pisa_descion_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
                 timeouts_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 no_vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
+                consensus_mode: ConsensusMode::Optimistic,
+                acs_manager: ACSManager::new(name, committee.clone(), signature_service.clone()),
+                optimistic_buffer: Vec::new(),
+                pisa_bval_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
+                pisa_aux_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
+                pisa_descion_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
+                last_seen_headers: HashMap::new(),
+                consensus_round,
+                acs_timeout,
             }
             .run()
             .await;
@@ -348,6 +359,7 @@ impl Core {
                     .entry(header.round)
                     .or_insert_with(Vec::new)
                     .push(handler);
+                self.last_seen_headers.insert(header.author, header.clone());
             }
         }
 
@@ -515,7 +527,339 @@ impl Core {
         Ok(())
     }
 
-    async fn switch_to_fallback_mode(&mut self) {}
+    async fn switch_to_fallback_mode(&mut self) -> DagResult<()> {
+        let my_own_post_block = self
+            .acs_manager
+            .create_own_post_block(self.current_header.clone())
+            .await;
+        self.acs_manager.current_post_block = my_own_post_block.clone();
+
+        // PoST propose stage:
+        // Serialize the meta post instance into bytes using bincode or a similar serialization tool.
+        let bytes = bincode::serialize(&PrimaryMessage::MetaPoSTBlockData(
+            my_own_post_block.clone(),
+        ))
+        .expect("Failed to serialize own meta post block");
+
+        // Broadcast the serialized meta post to all other primaries.
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .map(|(_, info)| info.primary_to_primary)
+            .collect();
+
+        // Send the meta post to each address.
+        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+
+        self.cancel_handlers
+            .entry(my_own_post_block.stuck_block.round)
+            .or_insert_with(Vec::new)
+            .extend(handlers);
+
+        // Log the broadcast for debugging purposes.
+        debug!(
+            "Broadcasted own post block stuck in round {}",
+            my_own_post_block.stuck_block.round
+        );
+
+        self.process_meta_post_block(my_own_post_block.clone())
+            .await?;
+
+        Ok(())
+    }
+
+    async fn process_meta_post_block(
+        &mut self,
+        meta_post_block: MetaPoSTBlockData,
+    ) -> DagResult<()> {
+        debug!("Processing meta post block {:?}", meta_post_block);
+        let author = meta_post_block.stuck_block.author.clone();
+        self.acs_manager
+            .last_seen_post_blocks
+            .insert(author, meta_post_block.clone());
+        let post_block_vote =
+            PoSTBlockVote::new(&meta_post_block, &self.name, &mut self.signature_service).await;
+        if author == self.name {
+            self.process_meta_post_block_vote(post_block_vote.clone())
+                .await?;
+        } else {
+            let address = self
+                .committee
+                .primary(&author)
+                .expect("Author of valid header is not in the committee")
+                .primary_to_primary;
+            let bytes = bincode::serialize(&PrimaryMessage::PoSTBlockVote(post_block_vote.clone()))
+                .expect("Failed to serialize PoST block vote");
+            let handler = self.network.send(address, Bytes::from(bytes)).await;
+            self.cancel_handlers
+                .entry(meta_post_block.stuck_block.round)
+                .or_insert_with(Vec::new)
+                .push(handler);
+        }
+        Ok(())
+    }
+
+    async fn process_meta_post_block_vote(
+        &mut self,
+        post_block_vote: PoSTBlockVote,
+    ) -> DagResult<()> {
+        debug!("Processing PoST block vote {:?}", post_block_vote);
+        if let Some(post_block) = self.acs_manager.meta_post_vote_aggregator.append(
+            post_block_vote.clone(),
+            &self.committee,
+            &self.acs_manager.current_post_block,
+        )? {
+            // our post block is certified by 2f+1 nodes
+            let addresses = self
+                .committee
+                .others_primaries(&self.name)
+                .iter()
+                .map(|(_, info)| info.primary_to_primary)
+                .collect();
+            let bytes =
+                bincode::serialize(&PrimaryMessage::CertifiedPoSTBlockData(post_block.clone()))
+                    .expect("Failed to serialize PoST block");
+            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+            self.cancel_handlers
+                .entry(post_block.meta_post.stuck_block.round)
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+            // This is our post block, it must deliver via RBC
+            self.process_post_block_after_rbc(post_block).await?;
+        }
+        Ok(())
+    }
+
+    async fn process_post_block_after_rbc(
+        &mut self,
+        post_block: CertifiedPoSTBlockData,
+    ) -> DagResult<()> {
+        debug!("Processing PoST block {:?}", post_block);
+        if self
+            .acs_manager
+            .post_block_aggregator
+            .contains(&post_block.meta_post.stuck_block.author)
+        {
+            // we have handle this post block before
+            debug!("Post block already handled");
+            return Ok(());
+        } else {
+            // notify other primaries about the new post block
+            self.vote_certified_post_block(post_block.clone()).await;
+
+            // now see if we have 2f+1 post blocks for mvba
+            if let Some(meta_post_blocks) = self
+                .acs_manager
+                .post_block_aggregator
+                .append(post_block.clone().meta_post, &self.committee)?
+            {
+                let handler_round = post_block.clone().meta_post.stuck_block.round;
+                // create our mvba proposal
+                let mvba_proposal = MVBAProposal::new(
+                    self.name,
+                    self.acs_manager.last_acs_round,
+                    meta_post_blocks,
+                    &self.committee,
+                    &mut self.signature_service,
+                )
+                .await;
+                // handle own proposal
+                self.process_mvba_proposal(mvba_proposal.clone()).await?;
+                let addresses = self
+                    .committee
+                    .others_primaries(&self.name)
+                    .iter()
+                    .map(|(_, info)| info.primary_to_primary)
+                    .collect();
+                let bytes =
+                    bincode::serialize(&PrimaryMessage::MVBAProposal(mvba_proposal.clone()))
+                        .expect("Failed to serialize PoST block");
+                let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+
+                self.cancel_handlers
+                    .entry(handler_round)
+                    .or_insert_with(Vec::new)
+                    .extend(handlers);
+            }
+        }
+        Ok(())
+    }
+
+    async fn vote_certified_post_block(&mut self, post_block: CertifiedPoSTBlockData) {
+        let handler_round = post_block.clone().meta_post.stuck_block.round;
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .map(|(_, info)| info.primary_to_primary)
+            .collect();
+        // notify other primaries about the new post block
+        let certified_post_block_vote =
+            CertifiedPoSTBlockVote::new(post_block.clone(), self.name, &mut self.signature_service)
+                .await;
+        let bytes = bincode::serialize(&PrimaryMessage::CertifiedPoSTBlockVote(
+            certified_post_block_vote.clone(),
+        ))
+        .expect("Failed to serialize certified PoST block vote");
+        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+        self.cancel_handlers
+            .entry(handler_round)
+            .or_insert_with(Vec::new)
+            .extend(handlers);
+    }
+
+    async fn process_vote_phase_post_block(
+        &mut self,
+        certified_post_block_vote: CertifiedPoSTBlockVote,
+    ) -> DagResult<()> {
+        debug!(
+            "Processing certified post block vote {:?}",
+            certified_post_block_vote
+        );
+        let post_vote_aggregator = self
+            .acs_manager
+            .post_vote_aggregators
+            .entry(
+                certified_post_block_vote
+                    .certified_post_block
+                    .meta_post
+                    .stuck_block
+                    .author,
+            )
+            .or_insert_with(|| CertifiedPoSTVoteAggregator::new());
+        if let Some(post_block) =
+            post_vote_aggregator.append(certified_post_block_vote.clone(), &self.committee)?
+        {
+            self.process_post_block_after_rbc(post_block).await?;
+        }
+        Ok(())
+    }
+
+    async fn process_mvba_proposal(&mut self, mvba_proposal: MVBAProposal) -> DagResult<()> {
+        debug!("Processing mvba proposal {:?}", mvba_proposal);
+        let author = mvba_proposal.author.clone();
+        self.acs_manager
+            .last_seen_mvba_proposals
+            .insert(author, mvba_proposal.clone());
+        let mvba_proposal_vote = MVBAVote::new(
+            mvba_proposal.clone(),
+            self.name,
+            &mut self.signature_service,
+        )
+        .await;
+        if author == self.name {
+            self.process_mvba_proposal_vote(mvba_proposal_vote.clone())
+                .await?;
+        } else {
+            let address = self
+                .committee
+                .primary(&author)
+                .expect("Author of valid header is not in the committee")
+                .primary_to_primary;
+            let bytes = bincode::serialize(&PrimaryMessage::MVBAVote(mvba_proposal_vote.clone()))
+                .expect("Failed to serialize PoST block vote");
+            let handler = self.network.send(address, Bytes::from(bytes)).await;
+            self.cancel_handlers
+                .entry(mvba_proposal.acs_round)
+                .or_insert_with(Vec::new)
+                .push(handler);
+        }
+        Ok(())
+    }
+
+    async fn process_mvba_proposal_vote(&mut self, mvba_vote: MVBAVote) -> DagResult<()> {
+        debug!("Processing mvba vote {:?}", mvba_vote.clone());
+        if let Some(mvba) = self.acs_manager.mvba_proposal_vote_aggregator.append(
+            mvba_vote.clone(),
+            &self.committee,
+            &mvba_vote.mvba_proposal,
+        )? {
+            // our mvba is certified by 2f+1 nodes
+            let addresses = self
+                .committee
+                .others_primaries(&self.name)
+                .iter()
+                .map(|(_, info)| info.primary_to_primary)
+                .collect();
+            let bytes = bincode::serialize(&PrimaryMessage::CertifiedMVBA(mvba.clone()))
+                .expect("Failed to serialize PoST block");
+            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+            self.cancel_handlers
+                .entry(mvba.proposal.acs_round)
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+            // This is our mvba, it must deliver via RBC
+            self.process_mvba_after_rbc(mvba).await?;
+        }
+        Ok(())
+    }
+
+    async fn process_mvba_after_rbc(&mut self, mvba: CertifiedMVBA) -> DagResult<()> {
+        debug!("Processing mvba {:?}", mvba);
+        if self
+            .acs_manager
+            .mvba_proposal_aggregator
+            .contains(&mvba.proposal.author)
+        {
+            // we have handle this mvba before
+            debug!("MVBA already handled");
+            return Ok(());
+        } else {
+            // notify other primaries about the new mvba
+            self.vote_certified_mvba(mvba.clone()).await;
+
+            // now see if we have 2f+1 mvba for acs
+            if let Some(mvbas) = self
+                .acs_manager
+                .mvba_proposal_aggregator
+                .append(mvba.clone().proposal, &self.committee)?
+            {
+                // todo: enter the pisa protocol
+                debug!("Received MVBAs {:?}", mvbas);
+            }
+        }
+        Ok(())
+    }
+
+    async fn vote_certified_mvba(&mut self, mvba: CertifiedMVBA) {
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .map(|(_, info)| info.primary_to_primary)
+            .collect();
+        // notify other primaries about the new post block
+        let certified_mvba_vote =
+            CertifiedMVBAVote::new(mvba.clone(), self.name, &mut self.signature_service).await;
+        let bytes = bincode::serialize(&PrimaryMessage::CertifiedMVBAVote(
+            certified_mvba_vote.clone(),
+        ))
+        .expect("Failed to serialize certified mvba vote");
+        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+        self.cancel_handlers
+            .entry(mvba.proposal.acs_round)
+            .or_insert_with(Vec::new)
+            .extend(handlers);
+    }
+
+    async fn process_vote_phase_mvba(
+        &mut self,
+        certified_mvba_vote: CertifiedMVBAVote,
+    ) -> DagResult<()> {
+        debug!("Processing certified mvba vote {:?}", certified_mvba_vote);
+        let mvba_vote_aggregator = self
+            .acs_manager
+            .mvba_vote_aggregators
+            .entry(certified_mvba_vote.certified_mvba.proposal.author)
+            .or_insert_with(|| CertifiedMVBAVoteAggregator::new());
+        if let Some(mvba) =
+            mvba_vote_aggregator.append(certified_mvba_vote.clone(), &self.committee)?
+        {
+            self.process_mvba_after_rbc(mvba).await?;
+        }
+        Ok(())
+    }
 
     async fn initialize_pisa_protocol(&mut self) {
         let est_r = 1;
@@ -1095,6 +1439,176 @@ impl Core {
         certificate.verify(&self.committee).map_err(DagError::from)
     }
 
+    fn sanitize_meta_post_block(&mut self, meta_post_block: &MetaPoSTBlockData) -> DagResult<()> {
+        // verify if it has the same fallback view
+        // todo: buffer future PoST blocks
+        ensure!(
+            self.acs_manager.last_acs_round <= meta_post_block.acs_round,
+            DagError::PoSTTooOld(
+                meta_post_block.digest(),
+                meta_post_block.acs_round,
+                self.acs_manager.last_acs_round
+            )
+        );
+
+        // verify if it is the first PoST block from the node
+        let author = meta_post_block.stuck_block.author.clone();
+        ensure!(
+            self.acs_manager
+                .last_seen_post_blocks
+                .get(&author)
+                .is_none(),
+            DagError::AuthorityReuse(author)
+        );
+        // self.last_seen_post_blocks.insert(author, meta_post_block.clone());
+
+        // verify if it contains the latest vertex
+        if let Some(last_seen_header) = self.last_seen_headers.get(&author) {
+            // refuse an old vertex
+            ensure!(
+                last_seen_header.round <= meta_post_block.stuck_block.round,
+                DagError::HeaderTooOld(meta_post_block.stuck_block.round, last_seen_header.round)
+            );
+            if last_seen_header.round == meta_post_block.stuck_block.round {
+                // refuse equivocated PoST blocks
+                ensure!(
+                    last_seen_header.id == meta_post_block.stuck_block.id,
+                    DagError::EquivocationPoST
+                );
+            }
+        }
+
+        // Verify the meta post block.
+        meta_post_block
+            .verify(&self.committee)
+            .map_err(DagError::from)
+    }
+
+    fn sanitize_post_block_vote(&mut self, post_block_vote: &PoSTBlockVote) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round <= post_block_vote.acs_round,
+            DagError::TooOld(post_block_vote.digest(), post_block_vote.acs_round)
+        );
+
+        // Ensure we receive a vote on the expected post block.
+        ensure!(
+            post_block_vote.dg == self.acs_manager.current_post_block.dg
+                && post_block_vote.acs_round == self.acs_manager.current_post_block.acs_round,
+            DagError::UnexpectedPoSTVote(post_block_vote.dg.clone())
+        );
+
+        // Verify the post block vote.
+        post_block_vote
+            .verify(&self.committee)
+            .map_err(DagError::from)
+    }
+
+    fn sanitize_post_block(&mut self, post_block: &CertifiedPoSTBlockData) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round <= post_block.meta_post.acs_round,
+            DagError::TooOld(post_block.digest(), post_block.meta_post.acs_round)
+        );
+
+        // Verify the post block.
+        post_block.verify(&self.committee).map_err(DagError::from)
+    }
+
+    fn sanitize_certified_post_block_vote(
+        &mut self,
+        certified_post_block_vote: &CertifiedPoSTBlockVote,
+    ) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round
+                <= certified_post_block_vote
+                    .certified_post_block
+                    .meta_post
+                    .acs_round,
+            DagError::TooOld(
+                certified_post_block_vote.digest(),
+                certified_post_block_vote
+                    .certified_post_block
+                    .meta_post
+                    .acs_round
+            )
+        );
+
+        // Verify the post block vote.
+        certified_post_block_vote
+            .verify(&self.committee)
+            .map_err(DagError::from)
+    }
+
+    fn sanitize_mvba_proposal(&mut self, mvba_proposal: &MVBAProposal) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round <= mvba_proposal.acs_round,
+            DagError::TooOld(mvba_proposal.digest(), mvba_proposal.acs_round)
+        );
+
+        // verify if it is the first mvba proposal from the node
+        let author = mvba_proposal.author.clone();
+        if let Some(last_mvba_proposal) = self.acs_manager.last_seen_mvba_proposals.get(&author) {
+            // refuse equivocated mvba proposals
+            ensure!(
+                last_mvba_proposal.digest() == mvba_proposal.digest(),
+                DagError::EquivocationMVBAProposal
+            );
+        }
+        // Verify the mvba proposal.
+        mvba_proposal
+            .verify(&self.committee)
+            .map_err(DagError::from)
+    }
+
+    fn sanitize_mvba_proposal_vote(&mut self, mvba_vote: &MVBAVote) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round <= mvba_vote.mvba_proposal.acs_round,
+            DagError::TooOld(mvba_vote.digest(), mvba_vote.mvba_proposal.acs_round)
+        );
+
+        // Ensure we receive a vote on the expected mvba proposal.
+        if let Some(my_mvba_proposal) = self.acs_manager.last_seen_mvba_proposals.get(&self.name) {
+            ensure!(
+                mvba_vote.mvba_proposal.digest() == my_mvba_proposal.digest()
+                    && mvba_vote.mvba_proposal.acs_round == my_mvba_proposal.acs_round,
+                DagError::UnexpectedMVBAVote(mvba_vote.mvba_proposal.digest())
+            );
+        } else {
+            return Err(DagError::NotMyMVBAProposal);
+        }
+
+        // Verify the mvba vote.
+        mvba_vote.verify(&self.committee).map_err(DagError::from)
+    }
+
+    fn sanitize_mvba(&mut self, mvba: &CertifiedMVBA) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round <= mvba.proposal.acs_round,
+            DagError::TooOld(mvba.digest(), mvba.proposal.acs_round)
+        );
+
+        // Verify the mvba.
+        mvba.verify(&self.committee).map_err(DagError::from)
+    }
+
+    fn sanitize_certified_mvba_vote(
+        &mut self,
+        certified_mvba_vote: &CertifiedMVBAVote,
+    ) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round
+                <= certified_mvba_vote.certified_mvba.proposal.acs_round,
+            DagError::TooOld(
+                certified_mvba_vote.digest(),
+                certified_mvba_vote.certified_mvba.proposal.acs_round
+            )
+        );
+
+        // Verify the mvba vote.
+        certified_mvba_vote
+            .verify(&self.committee)
+            .map_err(DagError::from)
+    }
+
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         loop {
@@ -1161,6 +1675,54 @@ impl Core {
                                 // If we are in fallback mode we buffer the messages.
                                 self.optimistic_buffer.push(PrimaryMessage::Certificate(certificate));
                                 Ok(())
+                            }
+                        },
+                        PrimaryMessage::MetaPoSTBlockData(meta_post_block) => {
+                            match self.sanitize_meta_post_block(&meta_post_block) {
+                                Ok(()) => self.process_meta_post_block(meta_post_block.clone()).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::PoSTBlockVote(post_block_vote) => {
+                            match self.sanitize_post_block_vote(&post_block_vote) {
+                                Ok(()) => self.process_meta_post_block_vote(post_block_vote).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::CertifiedPoSTBlockData(post_block) => {
+                            match self.sanitize_post_block(&post_block) {
+                                Ok(()) => self.process_post_block_after_rbc(post_block).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::CertifiedPoSTBlockVote(certified_post_block_vote) => {
+                            match self.sanitize_certified_post_block_vote(&certified_post_block_vote) {
+                                Ok(()) => self.process_vote_phase_post_block(certified_post_block_vote).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::MVBAProposal(mvba_proposal) => {
+                            match self.sanitize_mvba_proposal(&mvba_proposal) {
+                                Ok(()) => self.process_mvba_proposal(mvba_proposal).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::MVBAVote(mvba_vote) => {
+                            match self.sanitize_mvba_proposal_vote(&mvba_vote) {
+                                Ok(()) => self.process_mvba_proposal_vote(mvba_vote).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::CertifiedMVBA(mvba) => {
+                            match self.sanitize_mvba(&mvba) {
+                                Ok(()) => self.process_mvba_after_rbc(mvba).await,
+                                error => error
+                            }
+                        },
+                        PrimaryMessage::CertifiedMVBAVote(certified_mvba_vote) => {
+                            match self.sanitize_certified_mvba_vote(&certified_mvba_vote) {
+                                Ok(()) => self.process_vote_phase_mvba(certified_mvba_vote).await,
+                                error => error
                             }
                         },
                         PrimaryMessage::PisaBval(pisa_bval) => {
