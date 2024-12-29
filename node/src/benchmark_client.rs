@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     info!("Transactions size: {} B", size);
 
     // NOTE: This log entry is used to compute performance.
-    info!("Transactions rate: {} tx/s", rate*(1000/burst_duration));
+    info!("Transactions rate: {} tx/s", rate * (1000 / burst_duration));
 
     let client = Client {
         target,
@@ -91,7 +91,7 @@ struct Client {
 
 impl Client {
     pub async fn send(&self) -> Result<()> {
-        const PRECISION: u64 = 20; // Sample precision.
+        // const PRECISION: u64 = 20; // Sample precision.
         info!("Burst duration {:?}", self.burst_duration);
 
         // The transaction size must be at least 16 bytes to ensure all txs are different.

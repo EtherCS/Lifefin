@@ -49,6 +49,14 @@ impl MetaPoSTBlockData {
         }
     }
 
+    pub fn round(&self) -> Round {
+        self.stuck_block.round
+    }
+
+    pub fn origin(&self) -> PublicKey {
+        self.stuck_block.author
+    }
+
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the wrapped stuck block is valid.
         self.stuck_block.verify(committee)?;
@@ -500,11 +508,18 @@ impl fmt::Debug for CertifiedMVBAVote {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ACSOutput {
     pub acs_round: Round,
-    pub vertices: Vec<CertifiedPoSTBlockData>,
+    pub vertices: Vec<MetaPoSTBlockData>,
 }
 
 impl ACSOutput {
-    pub fn new(acs_round: Round, vertices: Vec<CertifiedPoSTBlockData>) -> Self {
+    pub fn default() -> Self {
+        Self {
+            acs_round: 0,
+            vertices: Vec::new(),
+        }
+    }
+
+    pub fn new(acs_round: Round, vertices: Vec<MetaPoSTBlockData>) -> Self {
         Self {
             acs_round,
             vertices,
@@ -515,9 +530,9 @@ impl ACSOutput {
         self.acs_round
     }
 
-    pub fn new_leader_block(&self, committee: Committee) -> CertifiedPoSTBlockData {
+    pub fn new_leader_block(&self, committee: Committee) -> MetaPoSTBlockData {
         // collect the blocks with the highest round
-        let highest_blocks: Vec<&CertifiedPoSTBlockData> = self
+        let highest_blocks: Vec<&MetaPoSTBlockData> = self
             .vertices
             .iter()
             .filter(|block| block.round() == self.acs_round)
@@ -534,7 +549,7 @@ impl ACSOutput {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub struct FINMVBAView {
     pub mvba_round: MVBARoundNumber, // the (FIN) mvba round number
     pub aba_round: ABARoundNumber,   // the (Pisa) aba round number
@@ -556,11 +571,30 @@ impl FINMVBAView {
     }
 }
 
+impl Hash for FINMVBAView {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.mvba_round.to_le_bytes());
+        hasher.update(self.aba_round.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Display for FINMVBAView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "mvba_round: {}, aba_round: {}",
+            self.mvba_round, self.aba_round
+        )
+    }
+}
+
 pub struct ACSFin {
     /// The public key of the primary.
     name: PublicKey,
-    /// The round number
-    round: Round,
+    committee: Committee,
+    // acs_round: Round,
     /// the current MVBA view
     pub mvba_view: FINMVBAView,
     /// est_r value for round r
@@ -568,9 +602,9 @@ pub struct ACSFin {
     /// maj_r value for round r
     pub maj_r: BinaryValue,
     /// The bin values for each round
-    bin_values: HashMap<Round, Vec<BinaryValue>>,
+    bin_values: HashMap<FINMVBAView, Vec<BinaryValue>>,
     /// The list of maj's values.
-    pub majs: HashMap<Round, Vec<BinaryValue>>,
+    pub majs: HashMap<FINMVBAView, Vec<BinaryValue>>,
     /// Whether the ACS_FIN aux() message has been sent
     pub aux_sent: bool,
     /// Whether the ACS_FIN aux(1, *) message has been sent
@@ -586,10 +620,11 @@ pub struct ACSFin {
 }
 
 impl ACSFin {
-    pub fn spawn(name: PublicKey) -> ACSFin {
+    pub fn spawn(name: PublicKey, committee: Committee) -> ACSFin {
         Self {
             name,
-            round: 0,
+            committee,
+            // round: 0,
             mvba_view: FINMVBAView::new(),
             est_r: 0,
             maj_r: 0,
@@ -609,36 +644,64 @@ impl ACSFin {
         self.maj_r = 2;
     }
 
-    pub fn create_bval_message(&self, est: BinaryValue, maj: BinaryValue) -> PisaBval {
-        let bval_message = PisaBval::new(self.name, self.round, est, maj);
+    pub async fn create_bval_message(
+        &self,
+        acs_round: Round,
+        est: BinaryValue,
+        maj: BinaryValue,
+        signature_service: &mut SignatureService,
+    ) -> PisaBval {
+        let bval_message = PisaBval::new(
+            acs_round,
+            self.mvba_view.clone(),
+            est,
+            maj,
+            self.name,
+            signature_service,
+        )
+        .await;
         debug!("Created BVAL message: {:?}", bval_message);
 
         bval_message
     }
 
-    pub fn create_aux_message(&self, val1: BinaryValue, val2: BinaryValue) -> PisaAux {
-        let aux_message = PisaAux::new(self.name, self.round, val1, val2);
+    pub async fn create_aux_message(
+        &self,
+        acs_round: Round,
+        val1: BinaryValue,
+        val2: BinaryValue,
+        signature_service: &mut SignatureService,
+    ) -> PisaAux {
+        let aux_message = PisaAux::new(
+            acs_round,
+            self.mvba_view.clone(),
+            val1,
+            val2,
+            self.name,
+            signature_service,
+        )
+        .await;
         debug!("Created AUX message: {:?}", aux_message);
 
         aux_message
     }
 
-    pub fn add_bin_value(&mut self, round: Round, bin_value: BinaryValue) {
+    pub fn add_bin_value(&mut self, view: FINMVBAView, bin_value: BinaryValue) {
         self.bin_values
-            .entry(round)
+            .entry(view.clone())
             .or_insert_with(Vec::new)
             .push(bin_value);
 
-        debug!("Added bin value {:?} for round {}", bin_value, round);
+        debug!("Added bin value {:?} for view {:?}", bin_value, view);
     }
 
-    pub fn add_maj_value(&mut self, round: Round, maj_value: BinaryValue) {
+    pub fn add_maj_value(&mut self, view: FINMVBAView, maj_value: BinaryValue) {
         self.majs
-            .entry(round)
+            .entry(view.clone())
             .or_insert_with(Vec::new)
             .push(maj_value);
 
-        debug!("Added maj value {:?}", maj_value);
+        debug!("Added maj value {:?} for view {:?}", maj_value, view);
     }
 
     pub async fn broadcast_bval_message(
@@ -679,13 +742,22 @@ impl ACSFin {
 
     pub async fn decide(
         &mut self,
+        acs_round: Round,
         committee: &Committee,
         network: &mut ReliableSender,
         decide_value: BinaryValue,
+        signature_service: &mut SignatureService,
     ) -> Vec<CancelHandler> {
         self.decided = true;
 
-        let decide_message = PisaDecision::new(self.name, self.round, decide_value);
+        let decide_message = PisaDecision::new(
+            acs_round,
+            self.mvba_view.clone(),
+            decide_value,
+            self.name,
+            signature_service,
+        )
+        .await;
         debug!("Deciding {:?}", decide_message);
 
         let addresses = committee
@@ -775,8 +847,8 @@ impl ACSFin {
         avals_r: Vec<BinaryValue>,
         committee: &Committee,
     ) -> (bool, BinaryValue) {
-        let actual_coin = self.coin(self.round);
-        let last_coin = self.coin(self.round - 1);
+        let actual_coin = self.coin(self.mvba_view.aba_round);
+        let last_coin = self.coin(self.mvba_view.aba_round - 1);
 
         // If V2(vals_r, b) >= majority_threshold for b = 0 or b = 1, it means that a quorum of
         // replicas voted for b.
@@ -851,24 +923,46 @@ impl ACSFin {
         (false, 3)
     }
 
-    pub async fn advance_round(
+    pub fn advance_view(
         &mut self,
-        committee: &Committee,
-        network: &mut ReliableSender,
-    ) -> Vec<CancelHandler> {
-        self.round += 1;
+        new_view: FINMVBAView,
+        // committee: &Committee,
+        // network: &mut ReliableSender,
+    )
+    // -> Vec<CancelHandler>
+    {
+        self.mvba_view = new_view;
         self.bval_0_sent = false;
         self.bval_1_sent = false;
         self.aux_sent = false;
         self.aux_0_sent = false;
         self.aux_1_sent = false;
 
-        debug!("Pisa moving to round {}", self.round);
+        debug!("Pisa moving to view {:?}", self.mvba_view);
 
-        let bval_message = self.create_bval_message(self.est_r, self.maj_r);
+        // let bval_message = self.create_bval_message(self.est_r, self.maj_r);
 
-        self.broadcast_bval_message(committee, bval_message, network)
-            .await
+        // self.broadcast_bval_message(committee, bval_message, network)
+        //     .await
+    }
+
+    // pub fn new_fin_view(
+    //     &mut self,
+    //     new_view: FINMVBAView,
+    //     new_bval: BinaryValue,
+    //     new_maj: BinaryValue,
+    // ) {
+    //     self.mvba_view = new_view;
+    //     self.est_r = new_bval;
+    //     self.maj_r = new_maj;
+    // }
+
+    pub fn election(&self, mvba_view: FINMVBAView) -> usize {
+        (mvba_view.mvba_round % self.committee.authorities.len() as u64) as usize
+    }
+
+    pub fn current_election(&self) -> usize {
+        self.election(self.mvba_view.clone())
     }
 
     pub fn coin(&self, round: Round) -> BinaryValue {
@@ -879,8 +973,12 @@ impl ACSFin {
         let mut delta_b = 2;
 
         let not_b = 1 - b;
-        let last_coin = self.coin(self.round - 1);
-        let current_majs = self.majs.entry(self.round).or_insert_with(Vec::new).clone();
+        let last_coin = self.coin(self.mvba_view.aba_round - 1);
+        let current_majs = self
+            .majs
+            .entry(self.mvba_view.clone())
+            .or_insert_with(Vec::new)
+            .clone();
         let v1_majs_is_b = self.v1_check(current_majs.clone()).unwrap_or(3) == b;
         let majs_has_not_b = !current_majs.contains(&not_b);
 
@@ -891,7 +989,8 @@ impl ACSFin {
     }
 
     pub fn reset(&mut self) {
-        self.round = 0;
+        self.mvba_view.aba_round = 0;
+        self.mvba_view.mvba_round = 0;
         self.est_r = 0;
         self.maj_r = 0;
         self.bin_values.clear();

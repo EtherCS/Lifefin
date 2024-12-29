@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+use crate::acs_types::{FINMVBAView, MetaPoSTBlockData};
 use crate::error::{DagError, DagResult};
 use crate::primary::Round;
 use config::{Committee, WorkerId};
@@ -10,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 
-pub type BinaryValue = u8;  // 0, 1, or 2 (None)
+pub type BinaryValue = u8; // 0, 1, or 2 (None)
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
@@ -18,6 +19,7 @@ pub struct Header {
     pub round: Round,
     pub payload: BTreeMap<Digest, WorkerId>,
     pub parents: BTreeSet<Digest>,
+    pub post_blocks: Vec<MetaPoSTBlockData>, // help nodes to find the post blocks
     pub id: Digest,
     pub signature: Signature,
     pub timeout_cert: TimeoutCert,
@@ -25,6 +27,7 @@ pub struct Header {
 }
 
 impl Header {
+    // Creates a new vertex with a signature.
     pub async fn new(
         author: PublicKey,
         round: Round,
@@ -39,6 +42,37 @@ impl Header {
             round,
             payload,
             parents,
+            post_blocks: Vec::new(),
+            id: Digest::default(),
+            signature: Signature::default(),
+            timeout_cert,
+            no_vote_cert,
+        };
+        let id = header.digest();
+        let signature = signature_service.request_signature(id.clone()).await;
+        Self {
+            id,
+            signature,
+            ..header
+        }
+    }
+
+    pub async fn new_with_post_blocks(
+        author: PublicKey,
+        round: Round,
+        payload: BTreeMap<Digest, WorkerId>,
+        parents: BTreeSet<Digest>,
+        post_blocks: Vec<MetaPoSTBlockData>,
+        timeout_cert: TimeoutCert,
+        no_vote_cert: NoVoteCert,
+        signature_service: &mut SignatureService,
+    ) -> Self {
+        let header = Self {
+            author,
+            round,
+            payload,
+            parents,
+            post_blocks,
             id: Digest::default(),
             signature: Signature::default(),
             timeout_cert,
@@ -54,11 +88,16 @@ impl Header {
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // todo: complete the verification for post blocks
+        if self.post_blocks.len() > 0 {
+            return Ok(());
+        }
+
         // Ensure the header id is well formed.
         ensure!(self.digest() == self.id, DagError::InvalidHeaderId);
 
         // Ensure the authority has voting rights.
-        let voting_rights= committee.stake(&self.author);
+        let voting_rights = committee.stake(&self.author);
         ensure!(voting_rights > 0, DagError::UnknownAuthority(self.author));
 
         // Ensure all worker ids are correct.
@@ -74,7 +113,6 @@ impl Header {
             .map_err(DagError::from)
 
         // Check if pointer to prev leader exists
-
     }
 }
 
@@ -89,6 +127,9 @@ impl Hash for Header {
         }
         for x in &self.parents {
             hasher.update(x);
+        }
+        for x in &self.post_blocks {
+            hasher.update(&x.digest());
         }
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -163,12 +204,7 @@ impl Hash for Timeout {
 
 impl fmt::Debug for Timeout {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "Timeout: R{}({})",
-            self.round,
-            self.author,
-        )
+        write!(f, "Timeout: R{}({})", self.round, self.author,)
     }
 }
 
@@ -197,10 +233,7 @@ impl NoVoteMsg {
             signature: Signature::default(),
         };
         let signature = signature_service.request_signature(msg.digest()).await;
-        Self {
-            signature,
-            ..msg
-        }
+        Self { signature, ..msg }
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -228,12 +261,7 @@ impl Hash for NoVoteMsg {
 
 impl fmt::Debug for NoVoteMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "NoVoteMsg: R{}({})",
-            self.round,
-            self.author,
-        )
+        write!(f, "NoVoteMsg: R{}({})", self.round, self.author,)
     }
 }
 
@@ -485,35 +513,56 @@ impl PartialEq for Certificate {
     }
 }
 
-
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PisaBval {
-    pub author: PublicKey,
-    pub round: Round,
+    pub acs_round: Round,
+    pub view: FINMVBAView,
     pub est: BinaryValue,
     pub maj: BinaryValue,
+    pub author: PublicKey,
+    pub signature: Signature,
 }
 
 impl PisaBval {
-    pub fn new(
-        author: PublicKey,
-        round: Round,
+    pub async fn new(
+        acs_round: Round,
+        view: FINMVBAView,
         est: BinaryValue,
         maj: BinaryValue,
+        author: PublicKey,
+        signature_service: &mut SignatureService,
     ) -> Self {
-        Self {
-            author,
-            round,
+        let bval = Self {
+            acs_round,
+            view,
             est,
             maj,
-        }
+            author,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(bval.digest()).await;
+        Self { signature, ..bval }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            DagError::UnknownAuthority(self.author)
+        );
+
+        // Check the signature.
+        self.signature
+            .verify(&self.digest(), &self.author)
+            .map_err(DagError::from)
     }
 }
 
 impl Hash for PisaBval {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.acs_round.to_le_bytes());
+        hasher.update(&self.view.digest());
         hasher.update(&self.est.to_le_bytes());
         hasher.update(&self.maj.to_le_bytes());
         hasher.update(&self.author);
@@ -522,46 +571,65 @@ impl Hash for PisaBval {
 }
 
 impl fmt::Debug for PisaBval {
-    fn fmt(&self, f:&mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "PisaBval: PB({}, {})({}, {})",
-            self.author,
-            self.round,
-            self.est,
-            self.maj
+            "PisaBval: PB({}, acs_round {}, view: {:?})({}, {})",
+            self.author, self.acs_round, self.view, self.est, self.maj
         )
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PisaAux {
-    pub author: PublicKey,
-    pub round: Round,
+    pub acs_round: Round,
+    pub view: FINMVBAView,
     pub val1: BinaryValue,
     pub val2: BinaryValue,
+    pub author: PublicKey,
+    pub signature: Signature,
 }
 
 impl PisaAux {
-    pub fn new(
-        author: PublicKey,
-        round: Round,
+    pub async fn new(
+        acs_round: Round,
+        view: FINMVBAView,
         val1: BinaryValue,
         val2: BinaryValue,
+        author: PublicKey,
+        signature_service: &mut SignatureService,
     ) -> Self {
-        Self {
-            author,
-            round,
+        let aux = Self {
+            acs_round,
+            view,
             val1,
             val2,
-        }
+            author,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(aux.digest()).await;
+        Self { signature, ..aux }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            DagError::UnknownAuthority(self.author)
+        );
+
+        // Check the signature.
+        self.signature
+            .verify(&self.digest(), &self.author)
+            .map_err(DagError::from)
     }
 }
 
 impl Hash for PisaAux {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.acs_round.to_le_bytes());
+        hasher.update(&self.view.digest());
         hasher.update(&self.val1.to_le_bytes());
         hasher.update(&self.val2.to_le_bytes());
         hasher.update(&self.author);
@@ -570,59 +638,77 @@ impl Hash for PisaAux {
 }
 
 impl fmt::Debug for PisaAux {
-    fn fmt(&self, f:&mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "PisaAux: PA({}, {})({}, {})",
-            self.author,
-            self.round,
-            self.val1,
-            self.val2
+            "PisaAux: PA({}, acs_round {}, view {:?})({}, {})",
+            self.author, self.acs_round, self.view, self.val1, self.val2
         )
     }
 }
 
-
 #[derive(Clone, Serialize, Deserialize, Default)]
-pub struct PisaDecision{
-    pub author: PublicKey,
-    pub round: Round,
+pub struct PisaDecision {
+    pub acs_round: Round,
+    pub view: FINMVBAView,
     pub val: BinaryValue,
+    pub author: PublicKey,
+    pub signature: Signature,
 }
 
-impl PisaDecision{
-    pub fn new(
-        author: PublicKey,
-        round: Round,
+impl PisaDecision {
+    pub async fn new(
+        acs_round: Round,
+        view: FINMVBAView,
         val: BinaryValue,
+        author: PublicKey,
+        signature_service: &mut SignatureService,
     ) -> Self {
-        Self {
-            author,
-            round,
+        let decision = Self {
+            acs_round,
+            view,
             val,
+            author,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(decision.digest()).await;
+        Self {
+            signature,
+            ..decision
         }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            DagError::UnknownAuthority(self.author)
+        );
+
+        // Check the signature.
+        self.signature
+            .verify(&self.digest(), &self.author)
+            .map_err(DagError::from)
     }
 }
 
-impl Hash for PisaDecision{
+impl Hash for PisaDecision {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.acs_round.to_le_bytes());
+        hasher.update(&self.view.digest());
         hasher.update(&self.val.to_le_bytes());
         hasher.update(&self.author);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
-impl fmt::Debug for PisaDecision{
-    fn fmt(&self, f:&mut fmt::Formatter) -> Result<(), fmt::Error> {
+impl fmt::Debug for PisaDecision {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "DecideMessage: PD({}, {})({})",
-            self.author,
-            self.round,
-            self.val
+            "DecideMessage: PD({}, acs_round {}, view {})({})",
+            self.author, self.acs_round, self.view, self.val
         )
     }
 }
-

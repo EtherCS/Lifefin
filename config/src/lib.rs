@@ -158,6 +158,11 @@ impl Committee {
         self.authorities.keys().position(|x| x == name)
     }
 
+    /// Returns the authority at a specific index.
+    pub fn authority(&self, index: usize) -> Option<PublicKey> {
+        self.authorities.keys().nth(index).cloned()
+    }
+
     /// Returns the number of authorities.
     pub fn size(&self) -> usize {
         self.authorities.len()
@@ -200,8 +205,7 @@ impl Committee {
         // (2N + 1) / 3 = (N + f + 1) / 2
         // (2N + 3) / 3 = ceil((N + f + 1) / 2)
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        (2*total_votes + 3) / 3
-
+        (2 * total_votes + 3) / 3
     }
 
     /// Returns the stake required to reach a reliable broadcast threshold (1).
@@ -307,7 +311,6 @@ impl Default for KeyPair {
         Self::new()
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConsensusMode {

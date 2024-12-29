@@ -11,6 +11,7 @@ use crate::messages::{
 use config::{Committee, Stake};
 use crypto::{PublicKey, Signature};
 use std::collections::HashSet;
+use std::fmt::{self};
 
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
@@ -294,16 +295,17 @@ impl PoSTAggregator {
         post_block: MetaPoSTBlockData,
         committee: &Committee,
     ) -> DagResult<Option<Vec<MetaPoSTBlockData>>> {
-        // if we have already reached quorum, we don't need to add more blocks
-        if self.weight >= committee.quorum_threshold() {
-            return Ok(None);
-        }
-
         let author = post_block.stuck_block.author;
         // Ensure it is the first time this authority sends a MVBAProposal.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
         self.post_blocks.push(post_block);
+
+        // if we have already reached quorum, we don't need to return post blocks to trigger the mvba
+        if self.weight >= committee.quorum_threshold() {
+            return Ok(None);
+        }
+
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             // self.weight = 0;
@@ -316,10 +318,27 @@ impl PoSTAggregator {
         self.used.contains(author)
     }
 
+    pub fn post_block(&self, author: &PublicKey) -> Option<&MetaPoSTBlockData> {
+        self.post_blocks
+            .iter()
+            .find(|p| p.stuck_block.author == *author)
+    }
+
     pub fn reset(&mut self) {
         self.weight = 0;
         self.post_blocks.clear();
         self.used.clear();
+    }
+}
+
+impl fmt::Debug for PoSTAggregator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // print all the post blocks
+        write!(
+            f,
+            "PoSTAggregator: {{ meta_post_block: {:?} }}",
+            self.post_blocks,
+        )
     }
 }
 
@@ -387,26 +406,30 @@ impl MVBAAggregator {
         mvba_proposal: MVBAProposal,
         committee: &Committee,
     ) -> DagResult<Option<Vec<MVBAProposal>>> {
-        // if we have already reached quorum, we don't need to add more blocks
-        if self.weight >= committee.quorum_threshold() {
-            return Ok(None);
-        }
-
         let author = mvba_proposal.author;
         // Ensure it is the first time this authority sends a MVBAProposal.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
         self.mvba_proposals.push(mvba_proposal);
+
+        // if we have already reached quorum, we don't need to return post blocks to trigger the next phase (avoid equivocation)
+        // if self.weight >= committee.quorum_threshold() {
+        //     return Ok(None);
+        // }
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             // self.weight = 0;
-            return Ok(Some(self.mvba_proposals.drain(..).collect()));
+            return Ok(Some(self.mvba_proposals.clone()));
         }
         Ok(None)
     }
 
     pub fn contains(&self, author: &PublicKey) -> bool {
         self.used.contains(author)
+    }
+
+    pub fn mvba_proposals(&self, author: &PublicKey) -> Option<&MVBAProposal> {
+        self.mvba_proposals.iter().find(|p| p.author == *author)
     }
 
     pub fn reset(&mut self) {

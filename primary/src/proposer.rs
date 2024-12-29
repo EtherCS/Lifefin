@@ -1,3 +1,4 @@
+use crate::acs_types::MetaPoSTBlockData;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::messages::{Certificate, Header, NoVoteCert, NoVoteMsg, Timeout, TimeoutCert};
 use crate::primary::Round;
@@ -57,6 +58,9 @@ pub struct Proposer {
     last_timeout_cert: TimeoutCert,
     /// Holds the latest No Vote Certificate received.
     last_no_vote_cert: NoVoteCert,
+
+    /// Receives the meta post blocks and their proposers.
+    rx_post_proposer: Receiver<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
 }
 
 impl Proposer {
@@ -74,6 +78,7 @@ impl Proposer {
         rx_timeout_cert: Receiver<(TimeoutCert, Round)>,
         tx_core_no_vote_msg: Sender<NoVoteMsg>,
         rx_no_vote_cert: Receiver<(NoVoteCert, Round)>,
+        rx_post_proposer: Receiver<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
     ) {
         let genesis = Certificate::genesis(&committee);
         tokio::spawn(async move {
@@ -95,8 +100,9 @@ impl Proposer {
                 last_leader: None,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
-                last_timeout_cert: TimeoutCert:: new(0),
-                last_no_vote_cert: NoVoteCert:: new(0),
+                last_timeout_cert: TimeoutCert::new(0),
+                last_no_vote_cert: NoVoteCert::new(0),
+                rx_post_proposer,
             }
             .run()
             .await;
@@ -104,11 +110,8 @@ impl Proposer {
     }
 
     async fn make_timeout_msg(&mut self) {
-        let timeout_cert_msg = Timeout::new(
-            self.round,
-            self.name,
-            &mut self.signature_service,
-        ).await;
+        let timeout_cert_msg =
+            Timeout::new(self.round, self.name, &mut self.signature_service).await;
 
         debug!("Created {:?}", timeout_cert_msg);
 
@@ -120,11 +123,7 @@ impl Proposer {
     }
 
     async fn make_no_vote_msg(&mut self) {
-        let no_vote_msg = NoVoteMsg::new(
-            self.round,
-            self.name,
-            &mut self.signature_service,
-        ).await;
+        let no_vote_msg = NoVoteMsg::new(self.round, self.name, &mut self.signature_service).await;
 
         debug!("Created {:?}", no_vote_msg);
 
@@ -144,7 +143,9 @@ impl Proposer {
             TimeoutCert::new(0) // Assuming TimeoutCert::new creates an empty certificate
         };
 
-        let no_vote_cert = if self.committee.leader((self.round) as usize) == self.name && self.last_no_vote_cert.round == self.round - 1 {
+        let no_vote_cert = if self.committee.leader((self.round) as usize) == self.name
+            && self.last_no_vote_cert.round == self.round - 1
+        {
             self.last_no_vote_cert.clone()
         } else {
             NoVoteCert::new(0) // Assuming NoVoteCert::new creates an empty certificate
@@ -167,6 +168,33 @@ impl Proposer {
             // NOTE: This log entry is used to compute performance.
             info!("Created {} -> {:?}", header, digest);
         }
+
+        // Send the new header to the `Core` that will broadcast and process it.
+        self.tx_core
+            .send(header)
+            .await
+            .expect("Failed to send header");
+    }
+
+    async fn make_header_after_acs(&mut self, post_blocks: Vec<MetaPoSTBlockData>) {
+        let timeout_cert = TimeoutCert::new(0);
+        let no_vote_cert = NoVoteCert::new(0);
+        // let parents to be the BTreeSet of the post blocks
+        // set parents
+        // let parents = post_blocks.iter().map(|x| x.digest()).collect();
+        let header = Header::new_with_post_blocks(
+            self.name,
+            self.round,
+            self.digests.drain(..).collect(),
+            self.last_parents.drain(..).map(|x| x.digest()).collect(),
+            post_blocks,
+            timeout_cert,
+            no_vote_cert,
+            &mut self.signature_service,
+        )
+        .await;
+
+        debug!("ACS Created {:?}", header);
 
         // Send the new header to the `Core` that will broadcast and process it.
         self.tx_core
@@ -214,14 +242,18 @@ impl Proposer {
             let timer_expired = timer.is_elapsed();
 
             // TODO: This has to be fixed by sending timeout only once.
-            if timer_expired && !timeout_sent  {
+            if timer_expired && !timeout_sent {
                 warn!("Timer expired for round {}", self.round);
                 self.make_timeout_msg().await;
                 timeout_sent = true;
             }
 
-            if ((timer_expired && timeout_cert_gathered && (!is_next_leader || no_vote_cert_gathered)) || (enough_digests && advance)) && enough_parents {
-                
+            if ((timer_expired
+                && timeout_cert_gathered
+                && (!is_next_leader || no_vote_cert_gathered))
+                || (enough_digests && advance))
+                && enough_parents
+            {
                 if timer_expired && self.last_leader.is_none() && !is_next_leader {
                     self.make_no_vote_msg().await;
                 }
@@ -241,6 +273,22 @@ impl Proposer {
             }
 
             tokio::select! {
+                Some((post_blocks, parents, round)) = self.rx_post_proposer.recv() => {
+                    // todo: propose a new header with post blocks
+                    debug!("Received round {} post blocks {:?}", round, post_blocks);
+                    match round.cmp(&self.round) {
+                        Ordering::Greater | Ordering::Equal => {
+                            // We accept round bigger than our current round to jump ahead in case we were
+                            // late (or just joined the network).
+                            self.round = round;
+                            self.last_parents = parents;
+                            self.make_header_after_acs(post_blocks).await;
+                        },
+                        Ordering::Less => {
+                            // Ignore parents from older rounds.
+                        },
+                    }
+                }
                 Some((parents, round)) = self.rx_core.recv() => {
                     // info!("Received parents of round {} and we are in round {}", round, self.round);
                     // Compare the parents' round number with our current round.

@@ -1,8 +1,8 @@
 use crate::acs_manager::ACSManager;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::acs_types::{
-    CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote, MVBAProposal,
-    MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
+    ACSOutput, CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote,
+    FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
 };
 use crate::aggregators::{
     CertificatesAggregator, CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator,
@@ -11,8 +11,8 @@ use crate::aggregators::{
 };
 use crate::error::{DagError, DagResult};
 use crate::messages::{
-    Certificate, Header, NoVoteCert, NoVoteMsg, PisaAux, PisaBval, PisaDecision, Timeout,
-    TimeoutCert, Vote,
+    BinaryValue, Certificate, Header, NoVoteCert, NoVoteMsg, PisaAux, PisaBval, PisaDecision,
+    Timeout, TimeoutCert, Vote,
 };
 use crate::primary::{PrimaryMessage, Round};
 use crate::synchronizer::Synchronizer;
@@ -99,11 +99,11 @@ pub struct Core {
     /// Buffer for optimistic messages received in fallback mode.
     optimistic_buffer: Vec<PrimaryMessage>,
     /// Aggregator of Bval messages
-    pisa_bval_aggregators: HashMap<Round, Box<PisaBvalAggregator>>,
+    pisa_bval_aggregators: HashMap<FINMVBAView, Box<PisaBvalAggregator>>,
     /// Aggregator of Aux messages
-    pisa_aux_aggregators: HashMap<Round, Box<PisaAuxAggregator>>,
+    pisa_aux_aggregators: HashMap<FINMVBAView, Box<PisaAuxAggregator>>,
     /// Aggregator of the desicion messages of other primaries
-    pisa_descion_aggregators: HashMap<Round, Box<PisaDesicionAggregator>>,
+    pisa_descion_aggregators: HashMap<FINMVBAView, Box<PisaDesicionAggregator>>,
     /// The last seen headers from other primaries, used to verify the PoST blocks
     last_seen_headers: HashMap<PublicKey, Header>,
     /// (test only) The round for changing to fallback mode.
@@ -111,6 +111,8 @@ pub struct Core {
     /// Timeout (seconds) for triggering ACS
     acs_timeout: u64,
     // last_acs_output:
+    /// Send valid a quorum of post blocks to the `Proposer` (along with the decided acs round).
+    tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
 }
 
 impl Core {
@@ -136,6 +138,7 @@ impl Core {
         tx_consensus_header: Sender<Header>,
         fallback_round: Round,
         acs_timeout: u64,
+        tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -176,6 +179,7 @@ impl Core {
                 last_seen_headers: HashMap::new(),
                 consensus_round,
                 acs_timeout,
+                tx_post_proposer,
             }
             .run()
             .await;
@@ -281,43 +285,46 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.id.clone());
 
-        // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
-        // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
-        // reschedule processing of this header.
-        let parents = self.synchronizer.get_parents(header).await?;
-        if parents.is_empty() {
-            debug!("Processing of {} suspended: missing parent(s)", header.id);
-            return Ok(());
-        }
-        // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
-        let mut stake = 0;
-        let mut has_leader = false;
-        for x in parents {
+        // todo: add more verification for headers with post blocks
+        if header.post_blocks.len() == 0 {
+            // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
+            // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
+            // reschedule processing of this header.
+            let parents = self.synchronizer.get_parents(header).await?;
+            if parents.is_empty() {
+                debug!("Processing of {} suspended: missing parent(s)", header.id);
+                return Ok(());
+            }
+            // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
+            let mut stake = 0;
+            let mut has_leader = false;
+            for x in parents {
+                ensure!(
+                    x.round() + 1 == header.round,
+                    DagError::MalformedHeader(header.id.clone())
+                );
+                stake += self.committee.stake(&x.origin());
+
+                has_leader = has_leader
+                    || self
+                        .committee
+                        .leader((header.round - 1) as usize)
+                        .eq(&x.header.author);
+            }
             ensure!(
-                x.round() + 1 == header.round,
-                DagError::MalformedHeader(header.id.clone())
+                stake >= self.committee.quorum_threshold(),
+                DagError::HeaderRequiresQuorum(header.id.clone())
             );
-            stake += self.committee.stake(&x.origin());
 
-            has_leader = has_leader
-                || self
+            if !has_leader {
+                header.timeout_cert.verify(&self.committee)?;
+                if self
                     .committee
-                    .leader((header.round - 1) as usize)
-                    .eq(&x.header.author);
-        }
-        ensure!(
-            stake >= self.committee.quorum_threshold(),
-            DagError::HeaderRequiresQuorum(header.id.clone())
-        );
-
-        if !has_leader {
-            header.timeout_cert.verify(&self.committee)?;
-            if self
-                .committee
-                .leader(header.round as usize)
-                .eq(&header.author)
-            {
-                header.no_vote_cert.verify(&self.committee)?;
+                    .leader(header.round as usize)
+                    .eq(&header.author)
+                {
+                    header.no_vote_cert.verify(&self.committee)?;
+                }
             }
         }
 
@@ -332,6 +339,7 @@ impl Core {
         let bytes = bincode::serialize(header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
 
+        // todo: add more verification for headers with post blocks
         // Check if we can vote for this header.
         if self
             .last_voted
@@ -363,10 +371,13 @@ impl Core {
             }
         }
 
-        if header.round == self.fallback_round && self.consensus_mode == ConsensusMode::Optimistic {
+        if header.round == self.fallback_round
+            && self.consensus_mode == ConsensusMode::Optimistic
+            && self.acs_manager.last_acs_round < header.round
+        {
             self.consensus_mode = ConsensusMode::Fallback;
             debug!("Switched to fallback mode");
-            self.switch_to_fallback_mode().await;
+            let _ = self.switch_to_fallback_mode().await;
         }
 
         Ok(())
@@ -817,6 +828,28 @@ impl Core {
             {
                 // todo: enter the pisa protocol
                 debug!("Received MVBAs {:?}", mvbas);
+                debug!(
+                    "Received post blocks {:?}",
+                    self.acs_manager.post_block_aggregator
+                );
+                debug!("Enter Pisa protocol");
+                let k = self.acs_manager.acs_fin.current_election(); // get the authority index
+                if let Some(authority) = self.committee.authority(k) {
+                    if self
+                        .acs_manager
+                        .mvba_proposal_aggregator
+                        .contains(&authority)
+                    {
+                        // raba-propose or raba-repropose 1
+                        self.initialize_pisa_protocol(1).await;
+                    } else {
+                        // raba-propose 0
+                        self.initialize_pisa_protocol(0).await;
+                    }
+                } else {
+                    // error
+                    panic!("Pisa protocol: Authority not found");
+                }
             }
         }
         Ok(())
@@ -861,8 +894,8 @@ impl Core {
         Ok(())
     }
 
-    async fn initialize_pisa_protocol(&mut self) {
-        let est_r = 1;
+    async fn initialize_pisa_protocol(&mut self, raba_proposed_value: BinaryValue) {
+        let est_r = raba_proposed_value;
         self.acs_manager.acs_fin.propose(est_r);
 
         // To test if the protocol starts at round 1
@@ -880,7 +913,13 @@ impl Core {
         let bval_message = self
             .acs_manager
             .acs_fin
-            .create_bval_message(self.acs_manager.acs_fin.est_r, 2);
+            .create_bval_message(
+                self.acs_manager.last_acs_round,
+                self.acs_manager.acs_fin.est_r,
+                2,
+                &mut self.signature_service,
+            )
+            .await;
         self.acs_manager.acs_fin.bval_1_sent = true;
 
         let handlers = self
@@ -890,17 +929,26 @@ impl Core {
             .await;
 
         self.cancel_handlers
-            .entry(bval_message.round)
+            .entry(bval_message.view.aba_round)
             .or_insert_with(Vec::new)
             .extend(handlers);
 
         self.acs_manager
             .acs_fin
-            .add_bin_value(bval_message.round, bval_message.est);
+            .add_bin_value(bval_message.view, bval_message.est);
 
         // Broadcasting aux(1,1) if it hasn't been sent yet
         if !self.acs_manager.acs_fin.aux_sent {
-            let aux_message = self.acs_manager.acs_fin.create_aux_message(1, 1);
+            let aux_message = self
+                .acs_manager
+                .acs_fin
+                .create_aux_message(
+                    self.acs_manager.last_acs_round,
+                    1,
+                    1,
+                    &mut self.signature_service,
+                )
+                .await;
 
             let handlers = self
                 .acs_manager
@@ -909,7 +957,7 @@ impl Core {
                 .await;
 
             self.cancel_handlers
-                .entry(aux_message.round)
+                .entry(aux_message.view.mvba_round)
                 .or_insert_with(Vec::new)
                 .extend(handlers);
 
@@ -917,58 +965,102 @@ impl Core {
         }
     }
 
-    async fn switch_to_optimistic_mode(&mut self) {
+    async fn finalize_fallback(&mut self, acs_output: ACSOutput) {
+        // update the last acs round
+        self.acs_manager.last_acs_round = acs_output.acs_round();
+
+        // using post blocks to create certificates
+        let mut parents = Vec::new();
+
+        // Store the post_blocks and certificates.
+        for post_block in acs_output.vertices.iter() {
+            let bytes = bincode::serialize(post_block).expect("Failed to serialize post block");
+            self.store.write(post_block.digest().to_vec(), bytes).await;
+            // need construct certificate for DAG verification
+            let certificate = Certificate {
+                header: post_block.stuck_block.clone(),
+                votes: Vec::new(),
+            };
+            parents.push(certificate.clone());
+            let c_bytes =
+                bincode::serialize(&certificate).expect("Failed to serialize certificate");
+            self.store
+                .write(certificate.digest().to_vec(), c_bytes)
+                .await;
+            // Send it to the consensus layer.
+            let id = certificate.header.id.clone();
+            if let Err(e) = self.tx_consensus.send(certificate).await {
+                warn!(
+                    "Failed to deliver certificate {} to the consensus: {}",
+                    id, e
+                );
+            }
+        }
+
+        // todo: grace transition: acs_output.acs_round()+2
+        // need to rewrite the verification of DAG
+        self.tx_post_proposer
+            .send((
+                acs_output.vertices.clone(),
+                parents,
+                acs_output.acs_round() + 1,
+            ))
+            .await
+            .expect("Failed to send post proposer");
+
         self.consensus_mode = ConsensusMode::Optimistic;
         debug!("Switched to optimistic mode");
 
-        let messages: Vec<PrimaryMessage> = self.optimistic_buffer.drain(..).collect();
+        self.acs_manager.reset(acs_output.acs_round());
 
-        for message in messages {
-            let result = match message {
-                PrimaryMessage::Header(header) => match self.sanitize_header(&header) {
-                    Ok(()) => self.process_header(&header).await,
-                    error => error,
-                },
-                PrimaryMessage::Timeout(timeout) => match self.sanitize_timeout(&timeout) {
-                    Ok(()) => self.process_timeout(timeout).await,
-                    error => error,
-                },
-                PrimaryMessage::NoVoteMsg(no_vote_msg) => {
-                    match self.sanitize_no_vote_msg(&no_vote_msg) {
-                        Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
-                        error => error,
-                    }
-                }
-                PrimaryMessage::Vote(vote) => match self.sanitize_vote(&vote) {
-                    Ok(()) => self.process_vote(vote).await,
-                    error => error,
-                },
-                PrimaryMessage::Certificate(certificate) => {
-                    match self.sanitize_certificate(&certificate) {
-                        Ok(()) => self.process_certificate(certificate).await,
-                        error => error,
-                    }
-                }
-                _ => panic!("Unexpected core message"),
-            };
+        // let messages: Vec<PrimaryMessage> = self.optimistic_buffer.drain(..).collect();
 
-            match result {
-                Ok(()) => (),
-                Err(DagError::StoreError(e)) => {
-                    error!("{}", e);
-                    panic!("Storage failure: killing node.");
-                }
-                Err(e @ DagError::TooOld(..)) => debug!("{}", e),
-                Err(e) => warn!("{}", e),
-            }
-        }
+        // for message in messages {
+        //     let result = match message {
+        //         PrimaryMessage::Header(header) => match self.sanitize_header(&header) {
+        //             Ok(()) => self.process_header(&header).await,
+        //             error => error,
+        //         },
+        //         PrimaryMessage::Timeout(timeout) => match self.sanitize_timeout(&timeout) {
+        //             Ok(()) => self.process_timeout(timeout).await,
+        //             error => error,
+        //         },
+        //         PrimaryMessage::NoVoteMsg(no_vote_msg) => {
+        //             match self.sanitize_no_vote_msg(&no_vote_msg) {
+        //                 Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
+        //                 error => error,
+        //             }
+        //         }
+        //         PrimaryMessage::Vote(vote) => match self.sanitize_vote(&vote) {
+        //             Ok(()) => self.process_vote(vote).await,
+        //             error => error,
+        //         },
+        //         PrimaryMessage::Certificate(certificate) => {
+        //             match self.sanitize_certificate(&certificate) {
+        //                 Ok(()) => self.process_certificate(certificate).await,
+        //                 error => error,
+        //             }
+        //         }
+        //         _ => panic!("Unexpected core message"),
+        //     };
+
+        //     match result {
+        //         Ok(()) => (),
+        //         Err(DagError::StoreError(e)) => {
+        //             error!("{}", e);
+        //             panic!("Storage failure: killing node.");
+        //         }
+        //         Err(e @ DagError::TooOld(..)) => debug!("{}", e),
+        //         Err(e) => warn!("{}", e),
+        //     }
+        // }
     }
 
     async fn process_pisa_bval(&mut self, pisa_bval: PisaBval) -> DagResult<()> {
         info!("Processing pisa_bval_message{:?}", pisa_bval);
 
         // If acs is starting (round 0) we execute pisa protocol, else we execute pillar protocol.
-        match pisa_bval.round {
+        match pisa_bval.view.aba_round {
             0 => self.process_pisa_bval_start(pisa_bval).await?,
             _ => self.process_pillar_bval(pisa_bval).await?,
         }
@@ -981,7 +1073,7 @@ impl Core {
         // If we have received f + 1 bval(b, *) messages we can proceed.
         if self
             .pisa_bval_aggregators
-            .entry(pisa_bval.round)
+            .entry(pisa_bval.view.clone())
             .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
             .append(&self.committee, pisa_bval.clone())
         {
@@ -990,10 +1082,16 @@ impl Core {
                 0 => {
                     // If bval(0, maj_r message has not been broadcast yet, we broadcast it.
                     if !self.acs_manager.acs_fin.bval_0_sent {
-                        let bval_majr_message = self.acs_manager.acs_fin.create_bval_message(
-                            pisa_bval.est.clone(),
-                            self.acs_manager.acs_fin.maj_r,
-                        );
+                        let bval_majr_message = self
+                            .acs_manager
+                            .acs_fin
+                            .create_bval_message(
+                                self.acs_manager.last_acs_round,
+                                pisa_bval.est.clone(),
+                                self.acs_manager.acs_fin.maj_r,
+                                &mut self.signature_service,
+                            )
+                            .await;
 
                         let handlers = self
                             .acs_manager
@@ -1006,7 +1104,7 @@ impl Core {
                             .await;
 
                         self.cancel_handlers
-                            .entry(bval_majr_message.round)
+                            .entry(bval_majr_message.view.mvba_round)
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
@@ -1016,10 +1114,16 @@ impl Core {
                 1 => {
                     // If bval(1, maj_r message has not been broadcast yet, we broadcast it.
                     if !self.acs_manager.acs_fin.bval_1_sent {
-                        let bval_majr_message = self.acs_manager.acs_fin.create_bval_message(
-                            pisa_bval.est.clone(),
-                            self.acs_manager.acs_fin.maj_r,
-                        );
+                        let bval_majr_message = self
+                            .acs_manager
+                            .acs_fin
+                            .create_bval_message(
+                                self.acs_manager.last_acs_round,
+                                pisa_bval.est.clone(),
+                                self.acs_manager.acs_fin.maj_r,
+                                &mut self.signature_service,
+                            )
+                            .await;
 
                         let handlers = self
                             .acs_manager
@@ -1032,7 +1136,7 @@ impl Core {
                             .await;
 
                         self.cancel_handlers
-                            .entry(bval_majr_message.round)
+                            .entry(bval_majr_message.view.mvba_round)
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
@@ -1042,9 +1146,18 @@ impl Core {
                     // We add b to bin values if it is 1 and broadcast aux(1, 1) if we haven't.
                     self.acs_manager
                         .acs_fin
-                        .add_bin_value(pisa_bval.round, pisa_bval.est);
+                        .add_bin_value(pisa_bval.view.clone(), pisa_bval.est);
                     if !self.acs_manager.acs_fin.aux_sent {
-                        let aux_message = self.acs_manager.acs_fin.create_aux_message(1, 1);
+                        let aux_message = self
+                            .acs_manager
+                            .acs_fin
+                            .create_aux_message(
+                                self.acs_manager.last_acs_round,
+                                1,
+                                1,
+                                &mut self.signature_service,
+                            )
+                            .await;
                         let handlers = self
                             .acs_manager
                             .acs_fin
@@ -1056,7 +1169,7 @@ impl Core {
                             .await;
 
                         self.cancel_handlers
-                            .entry(aux_message.round)
+                            .entry(aux_message.view.mvba_round)
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
@@ -1069,19 +1182,25 @@ impl Core {
             // If we have received 2f + 1 bval(b, *) messages we can proceed.
             if self
                 .pisa_bval_aggregators
-                .entry(pisa_bval.round)
+                .entry(pisa_bval.view.clone())
                 .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
                 .enough_bvals_for_quorum(&self.committee, pisa_bval.est)
             {
                 info!("Received 2f + 1 bval({}, *) messages", pisa_bval.est);
                 self.acs_manager
                     .acs_fin
-                    .add_bin_value(pisa_bval.round, pisa_bval.est);
+                    .add_bin_value(pisa_bval.view, pisa_bval.est);
                 if self.acs_manager.acs_fin.aux_sent {
                     let aux_message = self
                         .acs_manager
                         .acs_fin
-                        .create_aux_message(pisa_bval.est, pisa_bval.est);
+                        .create_aux_message(
+                            self.acs_manager.last_acs_round,
+                            pisa_bval.est,
+                            pisa_bval.est,
+                            &mut self.signature_service,
+                        )
+                        .await;
 
                     let handlers = self
                         .acs_manager
@@ -1094,7 +1213,7 @@ impl Core {
                         .await;
 
                     self.cancel_handlers
-                        .entry(aux_message.round)
+                        .entry(aux_message.view.mvba_round)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
                     self.acs_manager.acs_fin.aux_sent = true;
@@ -1108,13 +1227,13 @@ impl Core {
         debug!("Executing pillar protocol with {:?}", pillar_bval);
         self.acs_manager
             .acs_fin
-            .add_maj_value(pillar_bval.round, pillar_bval.maj);
+            .add_maj_value(pillar_bval.view.clone(), pillar_bval.maj);
         let maj_r = self.acs_manager.acs_fin.maj_r;
 
         // If we have received f + 1 bval(b, *) messages we can proceed.
         if self
             .pisa_bval_aggregators
-            .entry(pillar_bval.round)
+            .entry(pillar_bval.view.clone())
             .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
             .append(&self.committee, pillar_bval.clone())
         {
@@ -1122,8 +1241,16 @@ impl Core {
             if let Some(message) = match pillar_bval.est {
                 0 => {
                     if !self.acs_manager.acs_fin.bval_0_sent {
-                        let bval_majr_message =
-                            self.acs_manager.acs_fin.create_bval_message(0, maj_r);
+                        let bval_majr_message = self
+                            .acs_manager
+                            .acs_fin
+                            .create_bval_message(
+                                self.acs_manager.last_acs_round,
+                                0,
+                                maj_r,
+                                &mut self.signature_service,
+                            )
+                            .await;
 
                         self.acs_manager.acs_fin.bval_0_sent = true;
                         Some(bval_majr_message)
@@ -1133,9 +1260,16 @@ impl Core {
                 }
                 1 => {
                     if !self.acs_manager.acs_fin.bval_1_sent {
-                        let bval_majr_message =
-                            self.acs_manager.acs_fin.create_bval_message(1, maj_r);
-
+                        let bval_majr_message = self
+                            .acs_manager
+                            .acs_fin
+                            .create_bval_message(
+                                self.acs_manager.last_acs_round,
+                                1,
+                                maj_r,
+                                &mut self.signature_service,
+                            )
+                            .await;
                         self.acs_manager.acs_fin.bval_1_sent = true;
                         Some(bval_majr_message)
                     } else {
@@ -1151,7 +1285,7 @@ impl Core {
                     .await;
 
                 self.cancel_handlers
-                    .entry(message.round)
+                    .entry(message.view.mvba_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -1159,28 +1293,42 @@ impl Core {
             // If we have received 2f + 1 bval(b, *) messages we can proceed.
             if self
                 .pisa_bval_aggregators
-                .entry(pillar_bval.round)
+                .entry(pillar_bval.view.clone())
                 .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
                 .enough_bvals_for_quorum(&self.committee, pillar_bval.est)
             {
                 info!("Received 2f + 1 bval({}, *) messages", pillar_bval.est);
                 self.acs_manager
                     .acs_fin
-                    .add_bin_value(pillar_bval.round, pillar_bval.est);
+                    .add_bin_value(pillar_bval.view.clone(), pillar_bval.est);
 
                 let delta_b = self.acs_manager.acs_fin.delta_b(pillar_bval.est);
 
                 // if aux(b, *) or aux(not b, *) has not been sent, we can proceed.
                 if !self.acs_manager.acs_fin.aux_0_sent || self.acs_manager.acs_fin.aux_1_sent {
                     let message = match delta_b {
-                        1 => self
-                            .acs_manager
-                            .acs_fin
-                            .create_aux_message(pillar_bval.est, pillar_bval.est),
-                        _ => self
-                            .acs_manager
-                            .acs_fin
-                            .create_aux_message(2, pillar_bval.est),
+                        1 => {
+                            self.acs_manager
+                                .acs_fin
+                                .create_aux_message(
+                                    self.acs_manager.last_acs_round,
+                                    pillar_bval.est,
+                                    pillar_bval.est,
+                                    &mut self.signature_service,
+                                )
+                                .await
+                        }
+                        _ => {
+                            self.acs_manager
+                                .acs_fin
+                                .create_aux_message(
+                                    self.acs_manager.last_acs_round,
+                                    2,
+                                    pillar_bval.est,
+                                    &mut self.signature_service,
+                                )
+                                .await
+                        }
                     };
                     let handlers = self
                         .acs_manager
@@ -1189,7 +1337,7 @@ impl Core {
                         .await;
 
                     self.cancel_handlers
-                        .entry(pillar_bval.round)
+                        .entry(pillar_bval.view.mvba_round)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
                 }
@@ -1202,7 +1350,7 @@ impl Core {
     async fn process_pisa_aux(&mut self, pisa_aux: PisaAux) -> DagResult<()> {
         debug!("Received pisa_aux_message{:?}", pisa_aux);
 
-        match pisa_aux.round {
+        match pisa_aux.view.aba_round {
             0 => self.process_pisa_aux_start(pisa_aux).await?,
             _ => self.process_pillar_aux(pisa_aux).await?,
         }
@@ -1215,14 +1363,14 @@ impl Core {
         // We are expecting n - f or 2f + 1 aux(*, *) messages.
         if self
             .pisa_aux_aggregators
-            .entry(pisa_aux.round)
+            .entry(pisa_aux.view.clone())
             .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
             .append(&self.committee, pisa_aux.clone())
         {
             info!("Received n - f or 2f + 1 aux(*, *) messages");
             let vals_r = self
                 .pisa_aux_aggregators
-                .entry(pisa_aux.round)
+                .entry(pisa_aux.view.clone())
                 .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
                 .get_vals_round();
 
@@ -1238,22 +1386,54 @@ impl Core {
                 let handlers = self
                     .acs_manager
                     .acs_fin
-                    .decide(&self.committee, &mut self.network, 1)
+                    .decide(
+                        self.acs_manager.last_acs_round,
+                        &self.committee,
+                        &mut self.network,
+                        1,
+                        &mut self.signature_service,
+                    )
                     .await;
                 self.cancel_handlers
-                    .entry(pisa_aux.round)
+                    .entry(pisa_aux.view.clone().mvba_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
-                self.switch_to_optimistic_mode().await;
+                // In aba_round = 0, we only decide on 1, everything is done
+                if let Some(acs_output) = self
+                    .acs_manager
+                    .decided_acs_output(self.acs_manager.acs_fin.mvba_view.clone())
+                {
+                    // todo: detect if we have missing post blocks
+                    self.acs_manager.acs_output = acs_output.clone();
+                    self.finalize_fallback(acs_output.clone()).await;
+                } else {
+                    debug!("ACS output not ready yet");
+                }
+                // self.switch_to_optimistic_mode().await;
             } else {
+                // enter next aba round and propose new bval message
+                let new_view = FINMVBAView::new_with_rounds(
+                    self.acs_manager.acs_fin.mvba_view.mvba_round,
+                    self.acs_manager.acs_fin.mvba_view.aba_round + 1,
+                );
+                self.acs_manager.acs_fin.advance_view(new_view);
+                let bval_message = self
+                    .acs_manager
+                    .acs_fin
+                    .create_bval_message(
+                        self.acs_manager.last_acs_round,
+                        self.acs_manager.acs_fin.est_r,
+                        self.acs_manager.acs_fin.maj_r,
+                        &mut self.signature_service,
+                    )
+                    .await;
                 let handlers = self
                     .acs_manager
                     .acs_fin
-                    .advance_round(&self.committee, &mut self.network)
+                    .broadcast_bval_message(&self.committee, bval_message, &mut self.network)
                     .await;
-
                 self.cancel_handlers
-                    .entry(pisa_aux.round)
+                    .entry(pisa_aux.view.mvba_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -1268,19 +1448,19 @@ impl Core {
         // We are expecting n - f or 2f + 1 aux(*, *) messages.
         if self
             .pisa_aux_aggregators
-            .entry(pillar_aux.round)
+            .entry(pillar_aux.view.clone())
             .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
             .append(&self.committee, pillar_aux.clone())
         {
             let vals_r = self
                 .pisa_aux_aggregators
-                .entry(pillar_aux.round)
+                .entry(pillar_aux.view.clone())
                 .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
                 .get_vals_round();
 
             let avals_r = self
                 .pisa_aux_aggregators
-                .entry(pillar_aux.round)
+                .entry(pillar_aux.view.clone())
                 .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
                 .get_avals_round();
 
@@ -1291,28 +1471,84 @@ impl Core {
 
             if decide && !self.acs_manager.acs_fin.decided {
                 // We broadcast the decide message if we haven't already and chancge to optimistic
-                // mode.
+                // todo: do different things based on the decided value b.
                 let handlers = self
                     .acs_manager
                     .acs_fin
-                    .decide(&self.committee, &mut self.network, b)
+                    .decide(
+                        self.acs_manager.last_acs_round,
+                        &self.committee,
+                        &mut self.network,
+                        b,
+                        &mut self.signature_service,
+                    )
                     .await;
                 self.cancel_handlers
-                    .entry(pillar_aux.round)
+                    .entry(pillar_aux.view.clone().mvba_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
-
-                self.switch_to_optimistic_mode().await;
+                if b == 1 {
+                    // we decide on 1, everything is done
+                    if let Some(acs_output) = self
+                        .acs_manager
+                        .decided_acs_output(self.acs_manager.acs_fin.mvba_view.clone())
+                    {
+                        // todo: detect if we have missing post blocks
+                        self.acs_manager.acs_output = acs_output.clone();
+                        self.finalize_fallback(acs_output.clone()).await;
+                    } else {
+                        debug!("ACS output not ready yet");
+                    }
+                    // self.switch_to_optimistic_mode().await;
+                } else if b == 0 {
+                    // we decide on 0, enter the next view
+                    let new_view = FINMVBAView::new_with_rounds(
+                        self.acs_manager.acs_fin.mvba_view.mvba_round + 1,
+                        0,
+                    );
+                    self.acs_manager.acs_fin.advance_view(new_view);
+                    let k = self.acs_manager.acs_fin.current_election(); // get the authority index
+                    if let Some(authority) = self.committee.authority(k) {
+                        if self
+                            .acs_manager
+                            .mvba_proposal_aggregator
+                            .contains(&authority)
+                        {
+                            // raba-propose 1
+                            self.initialize_pisa_protocol(1).await;
+                        } else {
+                            // raba-propose 0
+                            self.initialize_pisa_protocol(0).await;
+                        }
+                    } else {
+                        // error
+                        panic!("Pisa protocol: Authority not found");
+                    }
+                }
             } else {
-                // If we are not able to decide yet we continue to the next round.
+                // If we are not able to decide yet we continue to the next aba round and propose new bval message.
+                let new_view = FINMVBAView::new_with_rounds(
+                    self.acs_manager.acs_fin.mvba_view.mvba_round,
+                    self.acs_manager.acs_fin.mvba_view.aba_round + 1,
+                );
+                self.acs_manager.acs_fin.advance_view(new_view);
+                let bval_message = self
+                    .acs_manager
+                    .acs_fin
+                    .create_bval_message(
+                        self.acs_manager.last_acs_round,
+                        self.acs_manager.acs_fin.est_r,
+                        self.acs_manager.acs_fin.maj_r,
+                        &mut self.signature_service,
+                    )
+                    .await;
                 let handlers = self
                     .acs_manager
                     .acs_fin
-                    .advance_round(&self.committee, &mut self.network)
+                    .broadcast_bval_message(&self.committee, bval_message, &mut self.network)
                     .await;
-
                 self.cancel_handlers
-                    .entry(pillar_aux.round)
+                    .entry(pillar_aux.view.clone().mvba_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -1321,12 +1557,12 @@ impl Core {
     }
 
     async fn process_pisa_desicion(&mut self, desicion: PisaDecision) -> DagResult<()> {
-        debug!("Processing pisa_decision_message{:?}", desicion);
+        debug!("Processing pisa_decision_message {:?}", desicion);
 
         // If we have received 2f + 1 desicion messages we decide on that value.
         if self
             .pisa_descion_aggregators
-            .entry(desicion.round)
+            .entry(desicion.view.clone())
             .or_insert_with(|| Box::new(PisaDesicionAggregator::new()))
             .append(&self.committee, desicion.clone())
         {
@@ -1334,15 +1570,31 @@ impl Core {
                 let handlers = self
                     .acs_manager
                     .acs_fin
-                    .decide(&self.committee, &mut self.network, desicion.val)
+                    .decide(
+                        self.acs_manager.last_acs_round,
+                        &self.committee,
+                        &mut self.network,
+                        desicion.val,
+                        &mut self.signature_service,
+                    )
                     .await;
-
                 self.cancel_handlers
-                    .entry(desicion.round)
+                    .entry(desicion.view.clone().mvba_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
 
-                self.switch_to_optimistic_mode().await;
+                if let Some(acs_output) = self
+                    .acs_manager
+                    .decided_acs_output(self.acs_manager.acs_fin.mvba_view.clone())
+                {
+                    // todo: detect if we have missing post blocks
+                    self.acs_manager.acs_output = acs_output.clone();
+                    self.finalize_fallback(acs_output.clone()).await;
+                } else {
+                    debug!("ACS output not ready yet");
+                }
+
+                // self.switch_to_optimistic_mode().await;
             }
         }
         Ok(())
@@ -1609,6 +1861,56 @@ impl Core {
             .map_err(DagError::from)
     }
 
+    fn sanitize_pisa_bval(&mut self, pisa_bval: &PisaBval) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.acs_fin.mvba_view <= pisa_bval.clone().view,
+            DagError::PisaViewTooOld(pisa_bval.digest(), pisa_bval.clone().view)
+        );
+
+        ensure!(
+            self.acs_manager.last_acs_round <= pisa_bval.acs_round,
+            DagError::MVBAMsgTooOld(pisa_bval.acs_round, self.acs_manager.last_acs_round)
+        );
+
+        // Verify the pisa bval signature.
+        pisa_bval.verify(&self.committee).map_err(DagError::from)
+        // Ok(())
+    }
+
+    fn sanitize_pisa_aux(&mut self, pisa_aux: &PisaAux) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.acs_fin.mvba_view <= pisa_aux.clone().view,
+            DagError::PisaViewTooOld(pisa_aux.digest(), pisa_aux.clone().view)
+        );
+
+        ensure!(
+            self.acs_manager.last_acs_round <= pisa_aux.acs_round,
+            DagError::MVBAMsgTooOld(pisa_aux.acs_round, self.acs_manager.last_acs_round)
+        );
+
+        // Verify the pisa aux signature.
+        pisa_aux.verify(&self.committee).map_err(DagError::from)
+        // Ok(())
+    }
+
+    fn sanitize_pisa_desicion(&mut self, pisa_decision: &PisaDecision) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.acs_fin.mvba_view <= pisa_decision.clone().view,
+            DagError::PisaViewTooOld(pisa_decision.digest(), pisa_decision.clone().view)
+        );
+
+        ensure!(
+            self.acs_manager.last_acs_round <= pisa_decision.acs_round,
+            DagError::MVBAMsgTooOld(pisa_decision.acs_round, self.acs_manager.last_acs_round)
+        );
+
+        // Verify the pisa decision signature.
+        pisa_decision
+            .verify(&self.committee)
+            .map_err(DagError::from)
+        // Ok(())
+    }
+
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         loop {
@@ -1726,13 +2028,25 @@ impl Core {
                             }
                         },
                         PrimaryMessage::PisaBval(pisa_bval) => {
-                            self.process_pisa_bval(pisa_bval).await
+                            match self.sanitize_pisa_bval(&pisa_bval) {
+                                Ok(()) => self.process_pisa_bval(pisa_bval).await,
+                                error => error
+                            }
+                            // self.process_pisa_bval(pisa_bval).await
                         },
                         PrimaryMessage::PisaAux(pisa_aux) => {
-                            self.process_pisa_aux(pisa_aux).await
+                            match self.sanitize_pisa_aux(&pisa_aux) {
+                                Ok(()) => self.process_pisa_aux(pisa_aux).await,
+                                error => error
+                            }
+                            // self.process_pisa_aux(pisa_aux).await
                         },
                         PrimaryMessage::PisaDecision(pisa_decision) => {
-                            self.process_pisa_desicion(pisa_decision).await
+                            match self.sanitize_pisa_desicion(&pisa_decision) {
+                                Ok(()) => self.process_pisa_desicion(pisa_decision).await,
+                                error => error
+                            }
+                            // self.process_pisa_desicion(pisa_decision).await
                         },
                         _ => panic!("Unexpected core message")
                     }

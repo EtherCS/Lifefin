@@ -101,6 +101,8 @@ impl Primary {
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
 
+        let (tx_post_proposer, rx_post_proposer) = channel(CHANNEL_CAPACITY);
+
         // Write the parameters to the logs.
         parameters.log();
 
@@ -186,6 +188,7 @@ impl Primary {
             tx_consensus_header,
             fallback_round,
             acs_timeout,
+            tx_post_proposer,
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -232,6 +235,7 @@ impl Primary {
             rx_timeout_cert,
             tx_no_vote_msg,
             rx_no_vote_cert,
+            rx_post_proposer,
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.

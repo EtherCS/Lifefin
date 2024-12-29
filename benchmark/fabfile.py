@@ -30,7 +30,7 @@ def local(ctx, debug=True):
         'batch_size': 50_000,  # bytes
         'max_batch_delay': 200,  # ms
         'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
-        'fallback_round': 30,  # rounds
+        'fallback_round': 10,  # rounds
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

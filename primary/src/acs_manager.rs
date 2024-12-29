@@ -1,4 +1,5 @@
 use crate::{
+    acs_types::{ACSOutput, FINMVBAView},
     aggregators::{
         CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator, MVBAAggregator,
         MVBAProposalVoteAggregator, PoSTAggregator, PoSTVoteAggregator,
@@ -14,13 +15,12 @@ use crate::{
 use config::Committee;
 use crypto::{PublicKey, SignatureService};
 
-pub type AuthorIndex = usize;
-
 // #[derive(Clone)]
 pub struct ACSManager {
     name: PublicKey,
     committee: Committee,
     pub last_acs_round: Round, // the last round decided by ACS
+    pub acs_output: ACSOutput, // the last acs output (used for verification and synchronization)
     pub acs_fin: ACSFin,
     /// The last seen PoST blocks from other primaries
     pub last_seen_post_blocks: HashMap<PublicKey, MetaPoSTBlockData>,
@@ -47,9 +47,10 @@ impl ACSManager {
     pub fn new(name: PublicKey, committee: Committee, signature_service: SignatureService) -> Self {
         ACSManager {
             name,
-            committee,
+            committee: committee.clone(),
             last_acs_round: 0,
-            acs_fin: ACSFin::spawn(name),
+            acs_output: ACSOutput::default(),
+            acs_fin: ACSFin::spawn(name, committee),
             last_seen_post_blocks: HashMap::new(),
             last_seen_mvba_proposals: HashMap::new(),
             current_post_block: MetaPoSTBlockData::default(),
@@ -87,5 +88,33 @@ impl ACSManager {
             aggregator.reset();
         }
         self.mvba_proposal_aggregator.reset();
+    }
+
+    pub fn decided_acs_output(&self, view: FINMVBAView) -> Option<ACSOutput> {
+        let mut acs_vertices: Vec<MetaPoSTBlockData> = Vec::new();
+        let k = self.acs_fin.election(view.clone()); // the authority index proposing the mvba
+        if let Some(author) = self.committee.authority(k) {
+            if let Some(decided_mvba) = self.mvba_proposal_aggregator.mvba_proposals(&author) {
+                // get a vec containing all 1's indices in decided_mvba.proposal
+                let decided_author_indices: Vec<usize> = (0..32)
+                    .filter(|&i| (decided_mvba.proposal & (1 << i)) != 0)
+                    .collect();
+                for i in decided_author_indices {
+                    if let Some(author) = self.committee.authority(i) {
+                        if let Some(post_block) = self.post_block_aggregator.post_block(&author) {
+                            acs_vertices.push(post_block.clone());
+                        }
+                    }
+                }
+                // get the highest round from the acs_vertices
+                let highest_round = acs_vertices.iter().map(|v| v.round()).max().unwrap_or(0);
+                let acs_output = ACSOutput::new(highest_round, acs_vertices);
+                return Some(acs_output);
+            }
+        } else {
+            // error
+            panic!("Pisa protocol: Authority not found");
+        }
+        None
     }
 }

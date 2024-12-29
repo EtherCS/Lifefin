@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::primary::Round;
+use crate::{acs_types::FINMVBAView, primary::Round};
 use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
@@ -72,6 +72,9 @@ pub enum DagError {
     #[error("Received a PoST containing an old header (round {0}), expected round > {1}")]
     HeaderTooOld(Round, Round),
 
+    #[error("Received a MVBA message containing an old round {0}, expected round > {1}")]
+    MVBAMsgTooOld(Round, Round),
+
     #[error("Received unexpected post vote for post block {0}")]
     UnexpectedPoSTVote(Digest),
 
@@ -80,6 +83,9 @@ pub enum DagError {
 
     #[error("This is not my mvba proposal")]
     NotMyMVBAProposal,
+
+    #[error("Pisa {0} (view {1}) too old")]
+    PisaViewTooOld(Digest, FINMVBAView),
 
     #[error("Received invalid message for fallback mode")]
     InvalidFallbackMessage,
