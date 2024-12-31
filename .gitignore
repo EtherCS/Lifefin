@@ -36,3 +36,4 @@ Cargo.lock
 *.db
 benchmark_client
 node
+benchmark/*
