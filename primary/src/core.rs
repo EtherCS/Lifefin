@@ -110,7 +110,6 @@ pub struct Core {
     fallback_round: Round,
     /// Timeout (seconds) for triggering ACS
     acs_timeout: u64,
-    // last_acs_output:
     /// Send valid a quorum of post blocks to the `Proposer` (along with the decided acs round).
     tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
     /// Send ACS output to the consensus module for direct commit

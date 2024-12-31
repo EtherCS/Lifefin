@@ -17,7 +17,6 @@ use crypto::{PublicKey, SignatureService};
 
 // #[derive(Clone)]
 pub struct ACSManager {
-    name: PublicKey,
     committee: Committee,
     pub last_acs_round: Round, // the last round decided by ACS
     pub acs_output: ACSOutput, // the last acs output (used for verification and synchronization)
@@ -46,7 +45,6 @@ pub struct ACSManager {
 impl ACSManager {
     pub fn new(name: PublicKey, committee: Committee, signature_service: SignatureService) -> Self {
         ACSManager {
-            name,
             committee: committee.clone(),
             last_acs_round: 0,
             acs_output: ACSOutput::default(),
