@@ -113,6 +113,8 @@ pub struct Core {
     // last_acs_output:
     /// Send valid a quorum of post blocks to the `Proposer` (along with the decided acs round).
     tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
+    /// Send ACS output to the consensus module for direct commit
+    tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
 }
 
 impl Core {
@@ -139,6 +141,7 @@ impl Core {
         fallback_round: Round,
         acs_timeout: u64,
         tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
+        tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -180,6 +183,7 @@ impl Core {
                 consensus_round,
                 acs_timeout,
                 tx_post_proposer,
+                tx_acs_consensus,
             }
             .run()
             .await;
@@ -969,6 +973,9 @@ impl Core {
         // update the last acs round
         self.acs_manager.last_acs_round = acs_output.acs_round();
 
+        // get the new leader SB_L
+        let new_acs_leader = acs_output.new_leader_block(self.committee.clone());
+        let mut new_acs_leader_certificate = Certificate::default();
         // using post blocks to create certificates
         let mut parents = Vec::new();
 
@@ -981,6 +988,10 @@ impl Core {
                 header: post_block.stuck_block.clone(),
                 votes: Vec::new(),
             };
+            // record the new leader's certificate for directly commit
+            if post_block.digest() == new_acs_leader.digest() {
+                new_acs_leader_certificate = certificate.clone();
+            }
             parents.push(certificate.clone());
             let c_bytes =
                 bincode::serialize(&certificate).expect("Failed to serialize certificate");
@@ -996,6 +1007,12 @@ impl Core {
                 );
             }
         }
+
+        // send output to consensus module for direct commit
+        self.tx_acs_consensus
+            .send((acs_output.clone(), new_acs_leader_certificate))
+            .await
+            .expect("Failed to send new acs leader");
 
         // todo: grace transition: acs_output.acs_round()+2
         // need to rewrite the verification of DAG

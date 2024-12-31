@@ -1,6 +1,6 @@
 use crate::acs_types::{
-    CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote, MVBAProposal,
-    MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
+    ACSOutput, CertifiedMVBA, CertifiedMVBAVote, CertifiedPoSTBlockData, CertifiedPoSTBlockVote,
+    MVBAProposal, MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
 };
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::certificate_waiter::CertificateWaiter;
@@ -85,6 +85,7 @@ impl Primary {
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_consensus_header: Sender<Header>,
+        tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -189,6 +190,7 @@ impl Primary {
             fallback_round,
             acs_timeout,
             tx_post_proposer,
+            tx_acs_consensus,
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state

@@ -19,5 +19,6 @@ mod synchronizer;
 // #[path = "tests/common.rs"]
 // mod common;
 
+pub use crate::acs_types::ACSOutput;
 pub use crate::messages::{Certificate, Header};
 pub use crate::primary::{Primary, PrimaryWorkerMessage, Round, WorkerPrimaryMessage};

@@ -530,6 +530,7 @@ impl ACSOutput {
         self.acs_round
     }
 
+    /// return the new leader decided by the ACS
     pub fn new_leader_block(&self, committee: Committee) -> MetaPoSTBlockData {
         // collect the blocks with the highest round
         let highest_blocks: Vec<&MetaPoSTBlockData> = self
@@ -546,6 +547,26 @@ impl ACSOutput {
             }
         }
         leader_block
+    }
+
+    /// return the original leader in round self.acs_round-1 that might be directly committed
+    pub fn second_highest_block(&self, expected_leader: Digest) -> bool {
+        for block in self.vertices.clone() {
+            if block.stuck_block.parents.contains(&expected_leader) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl fmt::Debug for ACSOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ACSOutput {{ acs_round: {}, vertices: {:?} }}",
+            self.acs_round, self.vertices
+        )
     }
 }
 
