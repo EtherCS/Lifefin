@@ -14,7 +14,7 @@ Assume *n=3f+1* nodes, *f* are inflation attackers (defined in [here](https://gi
 Since there are only *2f* honest nodes that can vote for leader blocks and *3f* nodes (including attackers) can create new blocks, the protocol will continue to generate new blocks but no blocks can be committed.
 
 ## Current issue: the protocol could be stuck 
-In the current attack implementation, there is not guarantee that the protocol can continuously generate new blocks. 
+In the current attack implementation, there is no guarantee that the protocol can continuously generate new blocks. 
 
 Specifically, the DAG protocol allows a node to ***advance*** to a new round *r+1* without creating its block in round *r* after it received *2f+1* blocks in round *r*. In this case, it is possible that there are only *2f+1* blocks generated in round *r*.
 
@@ -22,10 +22,10 @@ After entering round *r+1*, attackers can only connect at most *2f* blocks in ro
 
 Eventually, there are at most *2f* new blocks in round *r+1* (*f* attackers cannot create new blocks, and 1 honest node is crashed). The protocol will be stuck since nodes cannot enter round *r+2*.
 
-## Solution (TODO)
+## Solution
 One solution (could be more) is to ask attackers to:
-1. ensure *f+2* blocks have been created by honest nodes every round. This has been implemented (see [code](https://github.com/EtherCS/dagACS/blob/DAG-inflation/crates/mysticeti-core/src/core.rs#L314) here)
-2. create blocks in *every round*. This hasn't been implemented.
+1. ensure *f+2* blocks have been created by honest nodes every round. This has been implemented (see [code](https://github.com/EtherCS/dagACS/blob/DAG-inflation-v2/crates/mysticeti-core/src/core.rs#L314) here).
+2. create blocks in *every round*. This has been implemented (see [code](https://github.com/EtherCS/dagACS/blob/DAG-inflation-v2/crates/mysticeti-core/src/threshold_clock.rs#L69) here).
 
 By doing these, attackers can guarantee there are *f+2+f=2f+2* blocks created every round. Therefore, attackers have *2f+1* (excluding the leader block) to connect and can create blocks every round.
 
