@@ -7,8 +7,8 @@ use minibytes::Bytes;
 
 use crate::{
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
-        PoSTBlockVote,
+        ACSOutput, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux,
+        PisaABABval, PoSTBlockVote,
     },
     block_handler::BlockHandler,
     block_store::BlockStore,
@@ -148,6 +148,14 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
         self.core.add_pisa_aba_auxiliaries(auxiliaries);
     }
 
+    pub fn add_acs_outputs(&mut self, outputs: Vec<ACSOutput>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Syncer::add_acs_outputs");
+        self.core.add_acs_outputs(outputs);
+    }
+
     pub fn force_new_block(&mut self, round: RoundNumber) -> bool {
         match self.core.consensus_mode() {
             ConsensusMode::Optimistic => {
@@ -162,7 +170,7 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             }
             ConsensusMode::Fallback => {
                 // we won't force new blocks in fallback mode
-                    false
+                false
             }
         }
     }

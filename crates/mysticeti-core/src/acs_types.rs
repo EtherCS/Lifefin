@@ -397,13 +397,18 @@ impl fmt::Debug for CertifiedMVBA {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ACSOutput {
+    pub view: RoundNumber,  // this is the round number of the current ACS instance
     pub round: RoundNumber, // the highest round agreed by the ACS mode
     pub blocks: Vec<Data<StatementBlock>>,
 }
 
 impl ACSOutput {
-    pub fn new(round: RoundNumber, blocks: Vec<Data<StatementBlock>>) -> Self {
-        Self { round, blocks }
+    pub fn new(view: RoundNumber, round: RoundNumber, blocks: Vec<Data<StatementBlock>>) -> Self {
+        Self {
+            view,
+            round,
+            blocks,
+        }
     }
 
     pub fn round(&self) -> RoundNumber {
@@ -469,7 +474,7 @@ impl FINMVBAView {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PisaABABval {
     pub last_acs_round: RoundNumber, // the last round agreed by the ACS mode
-    pub view: FINMVBAView, // the aba round number
+    pub view: FINMVBAView,           // the aba round number
     pub est: BinaryValue,
     pub maj: BinaryValue,
     pub authority: AuthorityIndex,
@@ -485,7 +490,8 @@ impl PisaABABval {
         authority: AuthorityIndex,
         signer: &Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_bval(last_acs_round, view.clone(), est, maj, authority);
+        let signature =
+            signer.sign_pisa_aba_bval(last_acs_round, view.clone(), est, maj, authority);
         Self {
             last_acs_round,
             view,
@@ -501,7 +507,13 @@ impl PisaABABval {
     }
 
     pub fn digest(&self) -> PisaABADigest {
-        PisaABADigest::new(self.last_acs_round, self.view.clone(), self.est, self.maj, self.authority)
+        PisaABADigest::new(
+            self.last_acs_round,
+            self.view.clone(),
+            self.est,
+            self.maj,
+            self.authority,
+        )
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -529,7 +541,7 @@ impl fmt::Debug for PisaABABval {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PisaABAAux {
     pub last_acs_round: RoundNumber, // the last round agreed by the ACS mode
-    pub view: FINMVBAView, // the aba round number
+    pub view: FINMVBAView,           // the aba round number
     pub aux1: BinaryValue,
     pub aux2: BinaryValue,
     pub authority: AuthorityIndex,
@@ -538,14 +550,15 @@ pub struct PisaABAAux {
 
 impl PisaABAAux {
     pub fn new(
-        last_acs_round: RoundNumber, 
+        last_acs_round: RoundNumber,
         view: FINMVBAView,
         aux1: BinaryValue,
         aux2: BinaryValue,
         authority: AuthorityIndex,
         signer: &Signer,
     ) -> Self {
-        let signature = signer.sign_pisa_aba_aux(last_acs_round, view.clone(), aux1, aux2, authority);
+        let signature =
+            signer.sign_pisa_aba_aux(last_acs_round, view.clone(), aux1, aux2, authority);
         Self {
             last_acs_round,
             view,
@@ -561,7 +574,13 @@ impl PisaABAAux {
     }
 
     pub fn digest(&self) -> PisaABADigest {
-        PisaABADigest::new(self.last_acs_round, self.view.clone(), self.aux1, self.aux2, self.authority)
+        PisaABADigest::new(
+            self.last_acs_round,
+            self.view.clone(),
+            self.aux1,
+            self.aux2,
+            self.authority,
+        )
     }
 
     pub fn verify(&self, committee: &Committee) -> eyre::Result<()> {
@@ -713,9 +732,13 @@ impl ACSFin {
                 tracing::warn!("Invalid pisa aba bval from {}: {:?}", bval.author(), e);
                 continue;
             }
-            match bval.view.cmp(&self.mvba_view) {
+            match bval.view.cmp(&self.mvba_view.clone()) {
                 Ordering::Less => {
-                    tracing::warn!("Received a pisa aba bval with older view: {:?}", bval.view);
+                    tracing::warn!(
+                        "Received a pisa aba bval with older view: {:?}, my view is: {:?}",
+                        bval.view,
+                        self.mvba_view.clone()
+                    );
                     continue;
                 }
                 Ordering::Greater => {
@@ -749,11 +772,17 @@ impl ACSFin {
                     }
                     raba_bvals.push(bval.clone());
                     // we handle the pisa aba bval differently if we are in the 0-th aba round
-                    if self.mvba_view.aba_round == 0 {
+                    if self.mvba_view.clone().aba_round == 0 {
                         tracing::debug!("Handling pisa aba bval {:?} in the 0-th aba round", bval);
                         if bval.authority == self.authority {
-                            let return_aux =
-                                PisaABAAux::new(self.last_acs_round, bval.view.clone(), 1, 1, self.authority, signer);
+                            let return_aux = PisaABAAux::new(
+                                self.last_acs_round,
+                                bval.view.clone(),
+                                1,
+                                1,
+                                self.authority,
+                                signer,
+                            );
                             return_messages.push(PisaABAMessage::PisaABAAux(return_aux));
                         } else {
                             let est = bval.est;
@@ -828,9 +857,13 @@ impl ACSFin {
                 tracing::warn!("Invalid pisa aba aux from {}: {:?}", aux.author(), e);
                 continue;
             }
-            match aux.view.cmp(&self.mvba_view) {
+            match aux.view.cmp(&self.mvba_view.clone()) {
                 Ordering::Less => {
-                    tracing::warn!("Received a pisa aba aux with older view: {:?}, my view: {:?}", aux.view, self.mvba_view);
+                    tracing::warn!(
+                        "Received a pisa aba aux with older view: {:?}, my view: {:?}",
+                        aux.view,
+                        self.mvba_view.clone()
+                    );
                     continue;
                 }
                 Ordering::Greater => {
@@ -869,7 +902,7 @@ impl ACSFin {
             }
         }
 
-        // todo: discard invalid aux 
+        // todo: discard invalid aux
         // if self.delta_b(0) == 1 {
         //     // discard all aux with aux1 = 1
         //     self.raba_aux
@@ -899,7 +932,7 @@ impl ACSFin {
                     .or_insert(Vec::new())
                     .len()
             );
-            if self.mvba_view.aba_round == 0 {
+            if self.mvba_view.clone().aba_round == 0 {
                 if let Some(decided_authority) = self.try_decide_in_round_0() {
                     // if we can decide, then we can commit the ACS
                     if let Some(mvba) = self.mvbas.get(&decided_authority) {
@@ -955,13 +988,17 @@ impl ACSFin {
             }
         }
         if decided_value == 1 {
-            tracing::debug!("RABA decide {} in view {:?}", 1, self.mvba_view);
-            return Some(self.election(self.mvba_view.mvba_round));
+            tracing::debug!("RABA decide {} in view {:?}", 1, self.mvba_view.clone());
+            return Some(self.election(self.mvba_view.clone().mvba_round));
         } else {
             // unfortunately, we cannot decide, enter next aba round
+            tracing::debug!(
+                "Cannot decide 2 in view {:?}, enter a new aba round",
+                self.mvba_view.clone()
+            );
             let new_view = FINMVBAView::new_with_rounds(
-                self.mvba_view.mvba_round,
-                self.mvba_view.aba_round + 1,
+                self.mvba_view.clone().mvba_round,
+                self.mvba_view.clone().aba_round + 1,
             );
             self.new_fin_view(new_view, next_est, next_maj);
             return None;
@@ -973,8 +1010,8 @@ impl ACSFin {
         let mut decided_value = 2;
         let mut next_est = 2;
         let mut next_maj = 2;
-        let last_coin = self.coin(self.mvba_view.aba_round - 1);
-        let current_coin = self.coin(self.mvba_view.aba_round);
+        let last_coin = self.coin(self.mvba_view.clone().aba_round - 1);
+        let current_coin = self.coin(self.mvba_view.clone().aba_round);
         // let vals = self.get_binary_values_in_view(self.mvba_view.clone());
         let vals = self.get_agreement_phase_vals(self.mvba_view.clone());
         let avals = self.get_agreement_phase_avals(self.mvba_view.clone());
@@ -985,11 +1022,11 @@ impl ACSFin {
                 next_est = new_b;
                 next_maj = new_b;
                 if current_coin == new_b {
-                    tracing::debug!("RABA decide {} in view {:?}", new_b, self.mvba_view);
+                    tracing::debug!("RABA decide {} in view {:?}", new_b, self.mvba_view.clone());
                     decided_value = new_b;
                 }
             }
-            if self.mvba_view.aba_round > 0
+            if self.mvba_view.clone().aba_round > 0
                 && (self.get_only_value(&vals) == 2
                     || self.get_number_of_a_value(&vals, new_b)
                         < self.committee.acs_raba_decide_threshold())
@@ -1000,7 +1037,11 @@ impl ACSFin {
                     next_est = new_b;
                     next_maj = new_b;
                     if current_coin == new_b && last_coin == new_b {
-                        tracing::debug!("RABA decide {} in view {:?}", new_b, self.mvba_view);
+                        tracing::debug!(
+                            "RABA decide {} in view {:?}",
+                            new_b,
+                            self.mvba_view.clone()
+                        );
                         decided_value = new_b;
                     }
                 } else if avals.contains(&new_b) && new_b == last_coin {
@@ -1012,7 +1053,7 @@ impl ACSFin {
         // if next_est hasn't been set
         if next_est == 2 {
             next_est = current_coin;
-            if self.mvba_view.aba_round == 0 {
+            if self.mvba_view.clone().aba_round == 0 {
                 next_maj = current_coin;
             } else {
                 next_maj = self.get_majority(&vals)
@@ -1024,9 +1065,9 @@ impl ACSFin {
             // however, we cannot decide our mvba, enter a new mvba round and choose another mvba value
             tracing::debug!(
                 "Decided 0 in view {:?}, enter a new mvba roudn",
-                self.mvba_view
+                self.mvba_view.clone()
             );
-            let new_view = FINMVBAView::new_with_rounds(self.mvba_view.mvba_round + 1, 0);
+            let new_view = FINMVBAView::new_with_rounds(self.mvba_view.clone().mvba_round + 1, 0);
             let elected_mvba = self.election(new_view.mvba_round);
             // if we receive elected_mvba, est is set to 1
             if let Some(_mvba) = self.mvbas.get(&elected_mvba) {
@@ -1037,13 +1078,16 @@ impl ACSFin {
             return None;
         } else if decided_value == 1 {
             // the acs has decided
-            tracing::debug!("Decided 1 in view {:?}, the acs is done!", self.mvba_view);
-            return Some(self.election(self.mvba_view.mvba_round));
+            tracing::debug!(
+                "Decided 1 in view {:?}, the acs is done!",
+                self.mvba_view.clone()
+            );
+            return Some(self.election(self.mvba_view.clone().mvba_round));
         } else {
             // enter next aba round
             let new_view = FINMVBAView::new_with_rounds(
-                self.mvba_view.mvba_round,
-                self.mvba_view.aba_round + 1,
+                self.mvba_view.clone().mvba_round,
+                self.mvba_view.clone().aba_round + 1,
             );
             self.new_fin_view(new_view, next_est, next_maj);
             return None;
@@ -1065,13 +1109,26 @@ impl ACSFin {
                 .any(|aux| aux.authority == self.authority && aux.aux1 == est_cap)
         {
             if delta_b == 1 {
-                let return_aux =
-                    PisaABAAux::new(self.last_acs_round, bval.view.clone(), est, est, self.authority, signer);
+                let return_aux = PisaABAAux::new(
+                    self.last_acs_round,
+                    bval.view.clone(),
+                    est,
+                    est,
+                    self.authority,
+                    signer,
+                );
                 // add own aux to the view
                 view_raba_aux.push(return_aux.clone());
                 return Some(return_aux);
             } else {
-                let return_aux = PisaABAAux::new(self.last_acs_round, bval.view.clone(), 2, est, self.authority, signer);
+                let return_aux = PisaABAAux::new(
+                    self.last_acs_round,
+                    bval.view.clone(),
+                    2,
+                    est,
+                    self.authority,
+                    signer,
+                );
                 // add own aux to the view
                 view_raba_aux.push(return_aux.clone());
                 return Some(return_aux);
@@ -1092,7 +1149,14 @@ impl ACSFin {
             .iter()
             .any(|aux| aux.authority == self.authority && aux.aux1 == aux1 && aux.aux2 == aux2)
         {
-            let new_aux = PisaABAAux::new(self.last_acs_round, view.clone(), aux1, aux2, self.authority, signer);
+            let new_aux = PisaABAAux::new(
+                self.last_acs_round,
+                view.clone(),
+                aux1,
+                aux2,
+                self.authority,
+                signer,
+            );
             view_raba_aux.push(new_aux.clone());
             return Some(new_aux);
         }
@@ -1123,32 +1187,32 @@ impl ACSFin {
         None
     }
 
-    pub fn update_rbab_round(
-        &mut self,
-        new_est: BinaryValue,
-        new_maj: BinaryValue,
-        signer: &Signer,
-    ) -> PisaABABval {
-        self.mvba_view.aba_round += 1;
-        let new_pisa_aba_bval = PisaABABval::new(
-            self.last_acs_round,
-            self.mvba_view.clone(),
-            new_est,
-            new_maj,
-            self.authority,
-            signer,
-        );
-        self.raba_bvals
-            .entry(self.mvba_view.clone())
-            .or_insert(Vec::new())
-            .push(new_pisa_aba_bval.clone());
-        return new_pisa_aba_bval;
-    }
+    // pub fn update_rbab_round(
+    //     &mut self,
+    //     new_est: BinaryValue,
+    //     new_maj: BinaryValue,
+    //     signer: &Signer,
+    // ) -> PisaABABval {
+    //     self.mvba_view.clone().aba_round += 1;
+    //     let new_pisa_aba_bval = PisaABABval::new(
+    //         self.last_acs_round,
+    //         self.mvba_view.clone(),
+    //         new_est,
+    //         new_maj,
+    //         self.authority,
+    //         signer,
+    //     );
+    //     self.raba_bvals
+    //         .entry(self.mvba_view.clone())
+    //         .or_insert(Vec::new())
+    //         .push(new_pisa_aba_bval.clone());
+    //     return new_pisa_aba_bval;
+    // }
 
     /// bin_values
     pub fn get_binary_values_in_view(&mut self, view: FINMVBAView) -> Vec<BinaryValue> {
         let mut bvals = HashSet::new();
-        if view > self.mvba_view {
+        if view > self.mvba_view.clone() {
             tracing::warn!("Fail to get binary values: The view is in the future");
             return bvals.into_iter().collect();
         }
@@ -1181,7 +1245,7 @@ impl ACSFin {
     /// majs
     pub fn get_majs_in_view(&mut self, view: FINMVBAView) -> Vec<BinaryValue> {
         let mut majs = HashSet::new();
-        if view > self.mvba_view {
+        if view > self.mvba_view.clone() {
             tracing::warn!("Fail to get majs: The view is in the future");
             return majs.into_iter().collect();
         }
@@ -1207,6 +1271,7 @@ impl ACSFin {
         new_bval: BinaryValue,
         new_maj: BinaryValue,
     ) {
+        tracing::debug!("Update the view to {:?}", new_view);
         self.mvba_view = new_view.clone();
         self.current_bval = new_bval;
         self.current_maj = new_maj;
@@ -1249,6 +1314,7 @@ impl ACSFin {
     }
 
     pub fn reset(&mut self, latest_commit_round: RoundNumber) {
+        tracing::debug!("Reset the ACSFin");
         self.last_acs_round = latest_commit_round;
         self.mvbas.clear();
         self.current_bval = 0;
@@ -1265,7 +1331,7 @@ impl ACSFin {
     }
 
     pub fn current_election(&self) -> AuthorityIndex {
-        self.election(self.mvba_view.mvba_round)
+        self.election(self.mvba_view.clone().mvba_round)
     }
 
     /// todo: random
@@ -1351,10 +1417,10 @@ impl ACSFin {
         {
             return delta_b;
         }
-        if self.mvba_view.aba_round == 0 {
+        if self.mvba_view.clone().aba_round == 0 {
             delta_b = 1;
         }
-        let last_coin = self.coin(self.mvba_view.aba_round - 1);
+        let last_coin = self.coin(self.mvba_view.clone().aba_round - 1);
         let est_cap = (est + 1) % 2;
         let majs = self.get_majs_in_view(self.mvba_view.clone());
         if (est == last_coin && self.get_only_value(&majs) == est)

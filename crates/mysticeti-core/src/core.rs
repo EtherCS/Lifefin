@@ -38,9 +38,7 @@ use crate::{
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{
-        AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock,
-    },
+    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock},
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 use tokio::runtime::Runtime;
@@ -65,7 +63,7 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
-    /* Here are our defined structures for ACS mode */ 
+    /* Here are our defined structures for ACS mode */
     consensus_mode: ConsensusMode,
     acs_manager: ACSManager,
     last_seen_blocks: BTreeMap<AuthorityIndex, BlockReference>,
@@ -199,7 +197,7 @@ impl<H: BlockHandler> Core<H> {
             last_seen_blocks,
             acs_timeout: public_config.parameters.acs_timeout,
             last_commit_time: Instant::now(),
-            last_acs_output: ACSOutput::new(0, vec![]),
+            last_acs_output: ACSOutput::new(0, 0, vec![]),
             acs_trigger_round,
             network_connections: Arc::new(RwLock::new(HashMap::new())),
         };
@@ -293,13 +291,17 @@ impl<H: BlockHandler> Core<H> {
                 if vote.meta_post_block.stuck_round < self.acs_manager.round
                     || vote.meta_post_block.stuck_round < last_seen_block.round
                 {
-                    // ignore votes with previous rounds or rounds less than last seen block 
-                    tracing::debug!("stuck round {}, last_seen_block round {}", vote.meta_post_block.stuck_round, last_seen_block.round);
+                    // ignore votes with previous rounds or rounds less than last seen block
+                    tracing::debug!(
+                        "stuck round {}, last_seen_block round {}",
+                        vote.meta_post_block.stuck_round,
+                        last_seen_block.round
+                    );
                     continue;
                 }
             }
             filter_votes.push(vote);
-        } 
+        }
         let new_post_blocks = self.acs_manager.add_votes(filter_votes);
         // if we just received enough votes for a new own post block, broadcast it
         for new_post_block in new_post_blocks {
@@ -435,27 +437,40 @@ impl<H: BlockHandler> Core<H> {
                 // broadcast bval for the mvba round 0
                 self.acs_manager
                     .enter_fin_mvba(FINMVBAView::new(), est, maj);
-                let new_own_bval =
-                    PisaABABval::new(self.acs_manager.round, new_view, est, maj, self.authority, &self.signer);
+                let new_own_bval = PisaABABval::new(
+                    self.acs_manager.round,
+                    new_view,
+                    est,
+                    maj,
+                    self.authority,
+                    &self.signer,
+                );
                 // let rt_own = Runtime::new().unwrap();
                 // broadcast our own pisa bval
-                rt
-                    .block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_own_bval.clone())));
-                tracing::debug!("add_certified_mvbas: first create and broadcast own bval {:?}", new_own_bval);
+                rt.block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_own_bval.clone())));
+                tracing::debug!(
+                    "add_certified_mvbas: first create and broadcast own bval {:?}",
+                    new_own_bval
+                );
                 // also add the our created PisaABABval
                 let pisa_messages = self
                     .acs_manager
                     .add_pisa_aba_bvals(vec![new_own_bval], &self.signer);
                 // let rt = Runtime::new().unwrap();
                 for pisa_msg in pisa_messages {
-                    
                     match pisa_msg {
                         PisaABAMessage::PisaABABval(new_bval) => {
-                            tracing::debug!("add_certified_mvbas: create and broadcast own bval {:?}", new_bval);
+                            tracing::debug!(
+                                "add_certified_mvbas: create and broadcast own bval {:?}",
+                                new_bval
+                            );
                             rt.block_on(self.broadcast(NetworkMessage::PisaABABvalue(new_bval)));
                         }
                         PisaABAMessage::PisaABAAux(new_aux) => {
-                            tracing::debug!("add_certified_mvbas: Create and broadcast own aux {:?}", new_aux);
+                            tracing::debug!(
+                                "add_certified_mvbas: Create and broadcast own aux {:?}",
+                                new_aux
+                            );
                             rt.block_on(self.broadcast(NetworkMessage::PisaABAAuxiliary(new_aux)));
                         }
                     }
@@ -466,16 +481,26 @@ impl<H: BlockHandler> Core<H> {
                 for new_added_mvba in new_added_mvbas {
                     let authority_index = new_added_mvba.authority;
                     let current_elected_mvba = self.acs_manager.acs_fin.current_election();
-                    tracing::debug!("Current elected is {}, but authority index is {}", current_elected_mvba, authority_index);
+                    tracing::debug!(
+                        "Current elected is {}, but authority index is {}",
+                        current_elected_mvba,
+                        authority_index
+                    );
                     if current_elected_mvba == authority_index {
                         // we miss propose 0 for this mvba, now repropose 1 for it
                         // todo: currently, we only consider authority indices start from 0 and are consecutive, i.e., [0,1,2,...]
                         let new_view = FINMVBAView::new_with_rounds(
-                            self.acs_manager.acs_fin.mvba_view.mvba_round,
+                            self.acs_manager.acs_fin.mvba_view.clone().mvba_round,
                             0,
                         );
-                        let new_bval =
-                            PisaABABval::new(self.acs_manager.round, new_view, 1, 2, self.authority, &self.signer);
+                        let new_bval = PisaABABval::new(
+                            self.acs_manager.round,
+                            new_view,
+                            1,
+                            2,
+                            self.authority,
+                            &self.signer,
+                        );
                         // let repro_rt = Runtime::new().unwrap();
                         rt.block_on(
                             self.broadcast(NetworkMessage::PisaABABvalue(new_bval.clone())),
@@ -483,7 +508,7 @@ impl<H: BlockHandler> Core<H> {
                         tracing::debug!("Repropose for mvba bval {:?}", new_bval);
                     }
                     // otherwise, we don't need to repropose as we haven't enter that mvba round
-                } 
+                }
             }
         }
     }
@@ -501,7 +526,9 @@ impl<H: BlockHandler> Core<H> {
             }
             filter_bvals.push(bval);
         }
-        let pisa_messages = self.acs_manager.add_pisa_aba_bvals(filter_bvals, &self.signer);
+        let pisa_messages = self
+            .acs_manager
+            .add_pisa_aba_bvals(filter_bvals, &self.signer);
         for pisa_msg in pisa_messages {
             let rt = Runtime::new().unwrap();
             match pisa_msg {
@@ -515,7 +542,6 @@ impl<H: BlockHandler> Core<H> {
                 }
             }
         }
-
     }
 
     pub fn add_pisa_aba_auxiliaries(&mut self, auxs: Vec<PisaABAAux>) {
@@ -567,13 +593,28 @@ impl<H: BlockHandler> Core<H> {
                         .iter()
                         .map(|post_block| post_block.stuck_block.clone())
                         .collect();
-                    let acs_output = ACSOutput::new(acs_round, state_blocks);
+                    let acs_output =
+                        ACSOutput::new(self.acs_manager.round, acs_round, state_blocks);
                     // Fortunately, we have all post blocks, then we can commit the mvba
                     self.commit_acs(acs_output);
                 } else {
                     // we need to request the missing post blocks from other peers
                     // todo
                 }
+            }
+        }
+    }
+
+    /// terminate the ACS with others' help
+    pub fn add_acs_outputs(&mut self, acs_outputs: Vec<ACSOutput>) {
+        let _timer = self
+            .metrics
+            .utilization_timer
+            .utilization_timer("Core::add_acs_outputs");
+        for acs_output in acs_outputs {
+            if acs_output.view == self.acs_manager.round {
+                tracing::debug!("Received ACS output {:?}, terminate ACS", acs_output);
+                self.commit_acs(acs_output);
             }
         }
     }
@@ -618,8 +659,11 @@ impl<H: BlockHandler> Core<H> {
     }
 
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
+        // help others to terminate the ACS
+        let rt = Runtime::new().unwrap();
+        rt.block_on(self.broadcast(NetworkMessage::ACSOutput(acs_output.clone())));
         let new_leader_block = acs_output.new_leader(&self.committer);
-        tracing::debug!("Committing ACS output {:?}", acs_output);
+        tracing::debug!("Committing ACS output in view {}", acs_output.view);
         tracing::debug!("New leader block {:?}", new_leader_block);
         self.last_acs_output = acs_output.clone();
         // self.try_new_block_after_acs();
@@ -647,7 +691,10 @@ impl<H: BlockHandler> Core<H> {
     }
 
     /// In this function, we set up our state with acs_output for seamless transition
-    pub fn add_blocks_after_acs(&mut self, blocks: Vec<Data<StatementBlock>>) -> Vec<Data<StatementBlock>> {
+    pub fn add_blocks_after_acs(
+        &mut self,
+        blocks: Vec<Data<StatementBlock>>,
+    ) -> Vec<Data<StatementBlock>> {
         let _timer = self
             .metrics
             .utilization_timer

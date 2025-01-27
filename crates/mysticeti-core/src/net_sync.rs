@@ -269,6 +269,10 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         .add_pisa_aba_auxiliaries(vec![pisa_abab_auxiliary])
                         .await;
                 }
+                NetworkMessage::ACSOutput(acs_output) => {
+                    tracing::debug!("Received acs output view {} from {}", acs_output.view, peer);
+                    inner.syncer.add_acs_outputs(vec![acs_output]).await;
+                }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
                     // note: we move the block verification to the syncer

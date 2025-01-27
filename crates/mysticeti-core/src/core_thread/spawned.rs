@@ -7,8 +7,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     acs_types::{
-        CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux, PisaABABval,
-        PoSTBlockVote,
+        ACSOutput, CertifiedMVBA, CertifiedPoSTBlockData, MVBAProposal, MVBAVote, PisaABAAux,
+        PisaABABval, PoSTBlockVote,
     },
     block_handler::BlockHandler,
     data::Data,
@@ -45,6 +45,7 @@ enum CoreThreadCommand {
     AddCertifiedMVBA(Vec<CertifiedMVBA>, oneshot::Sender<()>),
     AddPisaABABvalues(Vec<PisaABABval>, oneshot::Sender<()>),
     AddPisaABAAuxiliaries(Vec<PisaABAAux>, oneshot::Sender<()>),
+    AddACSOutput(Vec<ACSOutput>, oneshot::Sender<()>),
 }
 
 impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 'static>
@@ -126,6 +127,13 @@ impl<H: BlockHandler + 'static, S: SyncerSignals + 'static, C: CommitObserver + 
             sender,
         ))
         .await;
+        receiver.await.expect("core thread is not expected to stop");
+    }
+
+    pub async fn add_acs_outputs(&self, outputs: Vec<ACSOutput>) {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::AddACSOutput(outputs, sender))
+            .await;
         receiver.await.expect("core thread is not expected to stop");
     }
 
@@ -227,6 +235,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> CoreThread<H, S, C> {
                 }
                 CoreThreadCommand::AddPisaABAAuxiliaries(auxiliaries, sender) => {
                     self.syncer.add_pisa_aba_auxiliaries(auxiliaries);
+                    sender.send(()).ok();
+                }
+                CoreThreadCommand::AddACSOutput(acs_output, sender) => {
+                    self.syncer.add_acs_outputs(acs_output);
                     sender.send(()).ok();
                 }
             }
