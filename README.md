@@ -12,7 +12,7 @@ This software is licensed as [Apache 2.0](LICENSE).
 ## Test
 ```bash
 cd scripts
-bash acsdryrun 4 500 60
+bash acsdryrun.sh 4 500 60
 ```
 
 This command runs **4** nodes for **60** seconds, where nodes will be stuck (i.e., entering the fallback consensus mode) in round **500**. After executing this command, check the log file (e.g., `v0.acs.log.ansi`). The nodes are considered to run the fallback consensus mode successfully if the relevant information are printed as follows:

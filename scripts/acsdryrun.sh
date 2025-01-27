@@ -22,6 +22,7 @@ tmux kill-server || true
 
 # Remove all v*.acs.log.ansi files
 rm -f v*.acs.log.ansi
+rm -rf dryacsrun-validator-*
 
 # Number of nodes
 num_nodes=${1}
