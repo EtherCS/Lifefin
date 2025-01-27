@@ -29,3 +29,11 @@ wal
 # don't check
 .pre-commit-config.yaml
 Cargo.lock
+
+# sailfish
+*.log
+*.csv
+*.db
+benchmark_client
+node
+benchmark/*
