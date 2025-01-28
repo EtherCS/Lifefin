@@ -26,11 +26,12 @@ rm -rf dryacsrun-validator-*
 
 # Number of nodes
 num_nodes=${1}
-stuck_round=${2}
-run_time=${3}
+crashes=${2}
+stuck_round=${3}
+run_time=${4}
 
 # Loop to create and run nodes
-for i in $(seq 0 $((num_nodes - 1))); do
+for i in $(seq 0 $((num_nodes - $crashes - 1))); do
     tmux new -d -s "v$i" "cargo run --bin mysticeti -- dry-acs-run --stuck-round $stuck_round --committee-size $num_nodes --authority $i > v$i.acs.log.ansi"
 done
 

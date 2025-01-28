@@ -339,6 +339,10 @@ impl<H: BlockHandler> Core<H> {
             } else {
                 let mvba_proposal =
                     MVBAProposal::new(mvba.authority, mvba.round, mvba.proposal, &self.signer);
+                // add our own vote
+                let my_vote =
+                    MVBAVote::new_with_signer(mvba_proposal.clone(), self.authority, &self.signer);
+                self.add_mvba_votes(vec![my_vote]);
                 rt.block_on(self.broadcast(NetworkMessage::MVBAProposal(mvba_proposal)));
             }
         } else {
