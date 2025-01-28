@@ -1468,6 +1468,36 @@ impl Core {
                     self.finalize_fallback(acs_output.clone()).await;
                 } else {
                     debug!("ACS output not ready yet");
+                    // enter next aba round and propose new bval message
+                    let new_view = FINMVBAView::new_with_rounds(
+                        self.acs_manager.acs_fin.mvba_view.mvba_round,
+                        self.acs_manager.acs_fin.mvba_view.aba_round + 1,
+                    );
+                    self.acs_manager.acs_fin.advance_view(new_view);
+                    let bval_message = self
+                        .acs_manager
+                        .acs_fin
+                        .create_bval_message(
+                            self.acs_manager.last_acs_round,
+                            self.acs_manager.acs_fin.est_r,
+                            self.acs_manager.acs_fin.maj_r,
+                            &mut self.signature_service,
+                        )
+                        .await;
+                    // add own bval
+                    self.pisa_bval_aggregators
+                        .entry(bval_message.view.clone())
+                        .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                        .append(&self.committee, bval_message.clone());
+                    let handlers = self
+                        .acs_manager
+                        .acs_fin
+                        .broadcast_bval_message(&self.committee, bval_message, &mut self.network)
+                        .await;
+                    self.cancel_handlers
+                        .entry(pisa_aux.view.mvba_round)
+                        .or_insert_with(Vec::new)
+                        .extend(handlers);
                 }
                 // self.switch_to_optimistic_mode().await;
             } else {
