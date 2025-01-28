@@ -923,6 +923,11 @@ impl Core {
                 &mut self.signature_service,
             )
             .await;
+        // add own bval
+        self.pisa_bval_aggregators
+            .entry(bval_message.view.clone())
+            .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+            .append(&self.committee, bval_message.clone());
         self.acs_manager.acs_fin.bval_1_sent = true;
 
         let handlers = self
@@ -952,7 +957,11 @@ impl Core {
                     &mut self.signature_service,
                 )
                 .await;
-
+            // add own aux
+            self.pisa_aux_aggregators
+                .entry(aux_message.view.clone())
+                .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
+                .append(&self.committee, aux_message.clone());
             let handlers = self
                 .acs_manager
                 .acs_fin
@@ -1024,6 +1033,10 @@ impl Core {
             .await
             .expect("Failed to send post proposer");
 
+        debug!(
+            "Committing ACS output in new round {}",
+            acs_output.acs_round
+        );
         self.consensus_mode = ConsensusMode::Optimistic;
         debug!("Switched to optimistic mode");
 
@@ -1108,7 +1121,11 @@ impl Core {
                                 &mut self.signature_service,
                             )
                             .await;
-
+                        // add own bval
+                        self.pisa_bval_aggregators
+                            .entry(bval_majr_message.view.clone())
+                            .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                            .append(&self.committee, bval_majr_message.clone());
                         let handlers = self
                             .acs_manager
                             .acs_fin
@@ -1140,7 +1157,11 @@ impl Core {
                                 &mut self.signature_service,
                             )
                             .await;
-
+                        // add own bval
+                        self.pisa_bval_aggregators
+                            .entry(bval_majr_message.view.clone())
+                            .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                            .append(&self.committee, bval_majr_message.clone());
                         let handlers = self
                             .acs_manager
                             .acs_fin
@@ -1174,6 +1195,11 @@ impl Core {
                                 &mut self.signature_service,
                             )
                             .await;
+                        // add own aux
+                        self.pisa_aux_aggregators
+                            .entry(aux_message.view.clone())
+                            .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
+                            .append(&self.committee, aux_message.clone());
                         let handlers = self
                             .acs_manager
                             .acs_fin
@@ -1217,7 +1243,11 @@ impl Core {
                             &mut self.signature_service,
                         )
                         .await;
-
+                    // add own aux
+                    self.pisa_aux_aggregators
+                        .entry(aux_message.view.clone())
+                        .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
+                        .append(&self.committee, aux_message.clone());
                     let handlers = self
                         .acs_manager
                         .acs_fin
@@ -1267,7 +1297,11 @@ impl Core {
                                 &mut self.signature_service,
                             )
                             .await;
-
+                        // add own bval
+                        self.pisa_bval_aggregators
+                            .entry(bval_majr_message.view.clone())
+                            .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                            .append(&self.committee, bval_majr_message.clone());
                         self.acs_manager.acs_fin.bval_0_sent = true;
                         Some(bval_majr_message)
                     } else {
@@ -1286,6 +1320,11 @@ impl Core {
                                 &mut self.signature_service,
                             )
                             .await;
+                        // add own bval
+                        self.pisa_bval_aggregators
+                            .entry(bval_majr_message.view.clone())
+                            .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                            .append(&self.committee, bval_majr_message.clone());
                         self.acs_manager.acs_fin.bval_1_sent = true;
                         Some(bval_majr_message)
                     } else {
@@ -1346,6 +1385,11 @@ impl Core {
                                 .await
                         }
                     };
+                    // add own aux
+                    self.pisa_aux_aggregators
+                        .entry(message.view.clone())
+                        .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
+                        .append(&self.committee, message.clone());
                     let handlers = self
                         .acs_manager
                         .acs_fin
@@ -1443,6 +1487,11 @@ impl Core {
                         &mut self.signature_service,
                     )
                     .await;
+                // add own bval
+                self.pisa_bval_aggregators
+                    .entry(bval_message.view.clone())
+                    .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                    .append(&self.committee, bval_message.clone());
                 let handlers = self
                     .acs_manager
                     .acs_fin
@@ -1558,6 +1607,11 @@ impl Core {
                         &mut self.signature_service,
                     )
                     .await;
+                // add own bval
+                self.pisa_bval_aggregators
+                    .entry(bval_message.view.clone())
+                    .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
+                    .append(&self.committee, bval_message.clone());
                 let handlers = self
                     .acs_manager
                     .acs_fin
