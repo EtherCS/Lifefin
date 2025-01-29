@@ -507,6 +507,7 @@ impl fmt::Debug for CertifiedMVBAVote {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ACSOutput {
+    pub view: Round, // this is the round number of the current ACS instance
     pub acs_round: Round,
     pub vertices: Vec<MetaPoSTBlockData>,
 }
@@ -514,13 +515,15 @@ pub struct ACSOutput {
 impl ACSOutput {
     pub fn default() -> Self {
         Self {
+            view: 0,
             acs_round: 0,
             vertices: Vec::new(),
         }
     }
 
-    pub fn new(acs_round: Round, vertices: Vec<MetaPoSTBlockData>) -> Self {
+    pub fn new(view: Round, acs_round: Round, vertices: Vec<MetaPoSTBlockData>) -> Self {
         Self {
+            view,
             acs_round,
             vertices,
         }

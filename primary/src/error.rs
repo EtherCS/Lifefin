@@ -87,6 +87,9 @@ pub enum DagError {
     #[error("Pisa {0} (view {1}) too old")]
     PisaViewTooOld(Digest, FINMVBAView),
 
+    #[error("Received inconsistent acs output in view {0}, our current acs round is {1}")]
+    NotSameACSView(Round, Round),
+
     #[error("Received invalid message for fallback mode")]
     InvalidFallbackMessage,
 }

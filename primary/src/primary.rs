@@ -54,6 +54,7 @@ pub enum PrimaryMessage {
     PisaBval(PisaBval),
     PisaAux(PisaAux),
     PisaDecision(PisaDecision),
+    ACSOutput(ACSOutput),
 }
 
 /// The messages sent by the primary to its workers.

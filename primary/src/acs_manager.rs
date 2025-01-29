@@ -106,7 +106,7 @@ impl ACSManager {
                 }
                 // get the highest round from the acs_vertices
                 let highest_round = acs_vertices.iter().map(|v| v.round()).max().unwrap_or(0);
-                let acs_output = ACSOutput::new(highest_round, acs_vertices);
+                let acs_output = ACSOutput::new(self.last_acs_round, highest_round, acs_vertices);
                 return Some(acs_output);
             }
         } else {

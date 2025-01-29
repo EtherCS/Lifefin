@@ -1043,47 +1043,20 @@ impl Core {
 
         self.acs_manager.reset(acs_output.acs_round());
 
-        // let messages: Vec<PrimaryMessage> = self.optimistic_buffer.drain(..).collect();
-
-        // for message in messages {
-        //     let result = match message {
-        //         PrimaryMessage::Header(header) => match self.sanitize_header(&header) {
-        //             Ok(()) => self.process_header(&header).await,
-        //             error => error,
-        //         },
-        //         PrimaryMessage::Timeout(timeout) => match self.sanitize_timeout(&timeout) {
-        //             Ok(()) => self.process_timeout(timeout).await,
-        //             error => error,
-        //         },
-        //         PrimaryMessage::NoVoteMsg(no_vote_msg) => {
-        //             match self.sanitize_no_vote_msg(&no_vote_msg) {
-        //                 Ok(()) => self.process_no_vote_msg(no_vote_msg).await,
-        //                 error => error,
-        //             }
-        //         }
-        //         PrimaryMessage::Vote(vote) => match self.sanitize_vote(&vote) {
-        //             Ok(()) => self.process_vote(vote).await,
-        //             error => error,
-        //         },
-        //         PrimaryMessage::Certificate(certificate) => {
-        //             match self.sanitize_certificate(&certificate) {
-        //                 Ok(()) => self.process_certificate(certificate).await,
-        //                 error => error,
-        //             }
-        //         }
-        //         _ => panic!("Unexpected core message"),
-        //     };
-
-        //     match result {
-        //         Ok(()) => (),
-        //         Err(DagError::StoreError(e)) => {
-        //             error!("{}", e);
-        //             panic!("Storage failure: killing node.");
-        //         }
-        //         Err(e @ DagError::TooOld(..)) => debug!("{}", e),
-        //         Err(e) => warn!("{}", e),
-        //     }
-        // }
+        // help others to terminate the ACS
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .map(|(_, info)| info.primary_to_primary)
+            .collect();
+        let bytes = bincode::serialize(&PrimaryMessage::ACSOutput(acs_output.clone()))
+            .expect("Failed to serialize ACS output");
+        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+        self.cancel_handlers
+            .entry(acs_output.acs_round())
+            .or_insert_with(Vec::new)
+            .extend(handlers);
     }
 
     async fn process_pisa_bval(&mut self, pisa_bval: PisaBval) -> DagResult<()> {
@@ -1701,6 +1674,15 @@ impl Core {
         Ok(())
     }
 
+    async fn process_acs_output(&mut self, acs_output: ACSOutput) -> DagResult<()> {
+        debug!(
+            "Terminate acs instance from others in view {}",
+            acs_output.view
+        );
+        self.finalize_fallback(acs_output.clone()).await;
+        Ok(())
+    }
+
     fn sanitize_header(&mut self, header: &Header) -> DagResult<()> {
         ensure!(
             self.gc_round <= header.round,
@@ -2012,6 +1994,17 @@ impl Core {
         // Ok(())
     }
 
+    fn sanitize_acs_output(&mut self, acs_output: &ACSOutput) -> DagResult<()> {
+        ensure!(
+            self.acs_manager.last_acs_round == acs_output.view,
+            DagError::NotSameACSView(acs_output.view, self.acs_manager.last_acs_round)
+        );
+
+        // todo: Verify the acs output signature.
+        // acs_output.verify(&self.committee).map_err(DagError::from)
+        Ok(())
+    }
+
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         loop {
@@ -2149,6 +2142,12 @@ impl Core {
                             }
                             // self.process_pisa_desicion(pisa_decision).await
                         },
+                        PrimaryMessage::ACSOutput(acs_output) => {
+                            match self.sanitize_acs_output(&acs_output) {
+                                Ok(()) => self.process_acs_output(acs_output).await,
+                                error => error
+                            }
+                        },
                         _ => panic!("Unexpected core message")
                     }
                 },
@@ -2170,7 +2169,7 @@ impl Core {
                 Some(no_vote_msg) = self.rx_no_vote_msg.recv() => self.process_own_no_vote_msg(no_vote_msg).await,
 
                 // We receive fallback message from consensus module, indicating we fail to commit blocks for a timeout
-                Some(_signal) = self.rx_fallback.recv() => { 
+                Some(_signal) = self.rx_fallback.recv() => {
                     if self.consensus_mode == ConsensusMode::Optimistic {
                         debug!("Switched to fallback mode after a timeout");
                         self.switch_to_fallback_mode().await

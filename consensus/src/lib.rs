@@ -327,6 +327,7 @@ impl Consensus {
                 }
             }
             if now - self.last_commit_time > Duration::from_secs(self.acs_timeout) {
+                debug!("ACS timeout is triggered");
                 self.tx_fallback
                     .send(self.acs_timeout)
                     .await
