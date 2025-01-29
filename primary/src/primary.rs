@@ -86,6 +86,7 @@ impl Primary {
         rx_consensus: Receiver<Certificate>,
         tx_consensus_header: Sender<Header>,
         tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
+        rx_fallback: Receiver<u64>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -166,7 +167,6 @@ impl Primary {
         let signature_service = SignatureService::new(secret);
 
         let fallback_round = parameters.fallback_round as Round;
-        let acs_timeout = parameters.acs_timeout;
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
             name,
@@ -188,9 +188,9 @@ impl Primary {
             tx_no_vote_cert,
             tx_consensus_header,
             fallback_round,
-            acs_timeout,
             tx_post_proposer,
             tx_acs_consensus,
+            rx_fallback,
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state

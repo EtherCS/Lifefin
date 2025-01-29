@@ -6,6 +6,7 @@ use log::{debug, info, log_enabled, warn};
 use primary::{ACSOutput, Certificate, Header, Round};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 #[cfg(test)]
@@ -84,6 +85,13 @@ pub struct Consensus {
     genesis: Vec<Certificate>,
     /// The stake vote received by the leader of a round.
     stake_vote: HashMap<Round, u32>,
+
+    /// Timeout (seconds) for triggering ACS
+    acs_timeout: u64,
+    /// The last time we committed blocks
+    last_commit_time: Instant,
+    /// Inform core to switch to fallback
+    tx_fallback: Sender<u64>,
 }
 
 impl Consensus {
@@ -95,6 +103,8 @@ impl Consensus {
         tx_primary: Sender<Certificate>,
         tx_output: Sender<Certificate>,
         rx_acs_consensus: Receiver<(ACSOutput, Certificate)>,
+        acs_timeout: u64,
+        tx_fallback: Sender<u64>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -107,6 +117,9 @@ impl Consensus {
                 rx_acs_consensus,
                 genesis: Certificate::genesis(&committee),
                 stake_vote: HashMap::with_capacity(2 * gc_depth as usize),
+                acs_timeout,
+                last_commit_time: Instant::now(),
+                tx_fallback,
             }
             .run()
             .await;
@@ -119,6 +132,7 @@ impl Consensus {
 
         // Listen to incoming certificates and header quorums.
         loop {
+            let now = Instant::now();
             tokio::select! {
                 // Listen to incoming headers.
                 Some(header) = self.rx_primary_header.recv() => {
@@ -166,6 +180,8 @@ impl Consensus {
                                 debug!("Latest commit of {}: Round {} with header", name, round);
                             }
                         }
+
+                        self.last_commit_time = Instant::now();
 
                         // Output the sequence in the right order.
                         for certificate in sequence {
@@ -309,6 +325,12 @@ impl Consensus {
                     self.commit_leader(leader.clone(), &mut state).await;
 
                 }
+            }
+            if now - self.last_commit_time > Duration::from_secs(self.acs_timeout) {
+                self.tx_fallback
+                    .send(self.acs_timeout)
+                    .await
+                    .expect("Failed to send fallback signal");
             }
         }
     }

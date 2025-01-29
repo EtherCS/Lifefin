@@ -108,12 +108,12 @@ pub struct Core {
     last_seen_headers: HashMap<PublicKey, Header>,
     /// (test only) The round for changing to fallback mode.
     fallback_round: Round,
-    /// Timeout (seconds) for triggering ACS
-    acs_timeout: u64,
     /// Send valid a quorum of post blocks to the `Proposer` (along with the decided acs round).
     tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
     /// Send ACS output to the consensus module for direct commit
     tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
+    /// Receive fallback messages from consensus module, long time not committed
+    rx_fallback: Receiver<u64>,
 }
 
 impl Core {
@@ -138,9 +138,9 @@ impl Core {
         tx_no_vote_cert: Sender<(NoVoteCert, Round)>,
         tx_consensus_header: Sender<Header>,
         fallback_round: Round,
-        acs_timeout: u64,
         tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
         tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
+        rx_fallback: Receiver<u64>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -180,9 +180,9 @@ impl Core {
                 pisa_descion_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 last_seen_headers: HashMap::new(),
                 consensus_round,
-                acs_timeout,
                 tx_post_proposer,
                 tx_acs_consensus,
+                rx_fallback,
             }
             .run()
             .await;
@@ -378,7 +378,7 @@ impl Core {
             && self.consensus_mode == ConsensusMode::Optimistic
             && self.acs_manager.last_acs_round < header.round
         {
-            self.consensus_mode = ConsensusMode::Fallback;
+            // self.consensus_mode = ConsensusMode::Fallback;
             debug!("Switched to fallback mode");
             let _ = self.switch_to_fallback_mode().await;
         }
@@ -542,6 +542,7 @@ impl Core {
     }
 
     async fn switch_to_fallback_mode(&mut self) -> DagResult<()> {
+        self.consensus_mode = ConsensusMode::Fallback;
         let my_own_post_block = self
             .acs_manager
             .create_own_post_block(self.current_header.clone())
@@ -2167,6 +2168,16 @@ impl Core {
                 Some(timeout) = self.rx_timeout.recv() => self.process_own_timeout(timeout).await,
                 // We also receive here our no vote messages created by the `Proposer`.
                 Some(no_vote_msg) = self.rx_no_vote_msg.recv() => self.process_own_no_vote_msg(no_vote_msg).await,
+
+                // We receive fallback message from consensus module, indicating we fail to commit blocks for a timeout
+                Some(_signal) = self.rx_fallback.recv() => { 
+                    if self.consensus_mode == ConsensusMode::Optimistic {
+                        debug!("Switched to fallback mode after a timeout");
+                        self.switch_to_fallback_mode().await
+                    } else {
+                        Ok(())
+                    }
+                },
             };
             match result {
                 Ok(()) => (),
