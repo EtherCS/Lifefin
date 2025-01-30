@@ -379,7 +379,10 @@ impl Core {
             && self.acs_manager.last_acs_round < header.round
         {
             // self.consensus_mode = ConsensusMode::Fallback;
-            debug!("Switched to fallback mode");
+            debug!(
+                "Switched to fallback mode in view {}",
+                self.acs_manager.last_acs_round
+            );
             let _ = self.switch_to_fallback_mode().await;
         }
 
@@ -979,6 +982,10 @@ impl Core {
     }
 
     async fn finalize_fallback(&mut self, acs_output: ACSOutput) {
+        debug!(
+            "Switched to optimistic mode in view {}",
+            self.acs_manager.last_acs_round
+        );
         // update the last acs round
         self.acs_manager.last_acs_round = acs_output.acs_round();
 
@@ -1039,7 +1046,6 @@ impl Core {
             acs_output.acs_round
         );
         self.consensus_mode = ConsensusMode::Optimistic;
-        debug!("Switched to optimistic mode");
 
         self.acs_manager.reset(acs_output.acs_round());
 
@@ -2171,7 +2177,7 @@ impl Core {
                 // We receive fallback message from consensus module, indicating we fail to commit blocks for a timeout
                 Some(_signal) = self.rx_fallback.recv() => {
                     if self.consensus_mode == ConsensusMode::Optimistic {
-                        debug!("Switched to fallback mode after a timeout");
+                        debug!("Switched to fallback mode in view {}", self.acs_manager.last_acs_round);
                         self.switch_to_fallback_mode().await
                     } else {
                         Ok(())
