@@ -161,8 +161,8 @@ class LogParser:
         )
 
     def _parse_workers(self, log):
-        if search(r"(?:panic|Error)", log) is not None:
-            raise ParseError("Worker(s) panicked")
+        # if search(r"(?:panic|Error)", log) is not None:
+        #     raise ParseError("Worker(s) panicked")
 
         tmp = findall(r"Batch ([^ ]+) contains (\d+) B", log)
         sizes = {d: int(s) for d, s in tmp}

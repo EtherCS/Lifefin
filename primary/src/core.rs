@@ -982,10 +982,7 @@ impl Core {
     }
 
     async fn finalize_fallback(&mut self, acs_output: ACSOutput) {
-        info!(
-            "Switched to optimistic mode in view {}",
-            self.acs_manager.last_acs_round
-        );
+        let last_acs_instance_view = self.acs_manager.last_acs_round;
         // update the last acs round
         self.acs_manager.last_acs_round = acs_output.acs_round();
 
@@ -1046,6 +1043,10 @@ impl Core {
             acs_output.acs_round
         );
         self.consensus_mode = ConsensusMode::Optimistic;
+        info!(
+            "Switched to optimistic mode in view {}",
+            last_acs_instance_view
+        );
 
         self.acs_manager.reset(acs_output.acs_round());
 
