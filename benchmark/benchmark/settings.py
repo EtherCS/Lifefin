@@ -7,21 +7,28 @@ class SettingsError(Exception):
 
 
 class Settings:
-    def __init__(self, key_name, key_path, base_port, repo_name, repo_url,
-                 branch, instance_type, zones):
-        inputs_str = [
-            key_name, key_path, repo_name, repo_url, branch, instance_type
-        ]
-        if isinstance(zones, list):
-            regions = zones
+    def __init__(
+        self,
+        key_name,
+        key_path,
+        base_port,
+        repo_name,
+        repo_url,
+        branch,
+        instance_type,
+        aws_regions,
+    ):
+        inputs_str = [key_name, key_path, repo_name, repo_url, branch, instance_type]
+        if isinstance(aws_regions, list):
+            regions = aws_regions
         else:
-            regions = [zones]
+            regions = [aws_regions]
         inputs_str += regions
         ok = all(isinstance(x, str) for x in inputs_str)
         ok &= isinstance(base_port, int)
         ok &= len(regions) > 0
         if not ok:
-            raise SettingsError('Invalid settings types')
+            raise SettingsError("Invalid settings types")
 
         self.key_name = key_name
         self.key_path = key_path
@@ -33,26 +40,26 @@ class Settings:
         self.branch = branch
 
         self.instance_type = instance_type
-        self.zones = regions
+        self.aws_regions = regions
 
     @classmethod
     def load(cls, filename):
         try:
-            with open(filename, 'r') as f:
+            with open(filename, "r") as f:
                 data = load(f)
 
             return cls(
-                data['key']['name'],
-                data['key']['path'],
-                data['port'],
-                data['repo']['name'],
-                data['repo']['url'],
-                data['repo']['branch'],
-                data['instances']['machine_type'],
-                data['instances']['zones'],
+                data["key"]["name"],
+                data["key"]["path"],
+                data["port"],
+                data["repo"]["name"],
+                data["repo"]["url"],
+                data["repo"]["branch"],
+                data["instances"]["type"],
+                data["instances"]["regions"],
             )
         except (OSError, JSONDecodeError) as e:
             raise SettingsError(str(e))
 
         except KeyError as e:
-            raise SettingsError(f'Malformed settings: missing key {e}')
+            raise SettingsError(f"Malformed settings: missing key {e}")

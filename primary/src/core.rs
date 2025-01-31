@@ -379,7 +379,7 @@ impl Core {
             && self.acs_manager.last_acs_round < header.round
         {
             // self.consensus_mode = ConsensusMode::Fallback;
-            debug!(
+            info!(
                 "Switched to fallback mode in view {}",
                 self.acs_manager.last_acs_round
             );
@@ -982,7 +982,7 @@ impl Core {
     }
 
     async fn finalize_fallback(&mut self, acs_output: ACSOutput) {
-        debug!(
+        info!(
             "Switched to optimistic mode in view {}",
             self.acs_manager.last_acs_round
         );
@@ -1041,7 +1041,7 @@ impl Core {
             .await
             .expect("Failed to send post proposer");
 
-        debug!(
+        info!(
             "Committing ACS output in new round {}",
             acs_output.acs_round
         );
@@ -2177,7 +2177,7 @@ impl Core {
                 // We receive fallback message from consensus module, indicating we fail to commit blocks for a timeout
                 Some(_signal) = self.rx_fallback.recv() => {
                     if self.consensus_mode == ConsensusMode::Optimistic {
-                        debug!("Switched to fallback mode in view {}", self.acs_manager.last_acs_round);
+                        info!("Switched to fallback mode in view {}", self.acs_manager.last_acs_round);
                         self.switch_to_fallback_mode().await
                     } else {
                         Ok(())

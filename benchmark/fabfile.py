@@ -5,8 +5,8 @@ from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import Print, BenchError
 from benchmark.plot import Ploter, PlotError
-# from benchmark.instance import InstanceManager
-# from benchmark.remote import Bench, BenchError
+from benchmark.instance import InstanceManager
+from benchmark.remote import Bench, BenchError
 
 
 @task
@@ -52,16 +52,16 @@ def create(ctx, nodes=1):
 def destroy(ctx):
     ''' Destroy the testbed '''
     try:
-        InstanceManager.make().delete_instances()
+        InstanceManager.make().terminate_instances()
     except BenchError as e:
         Print.error(e)
 
 
 @task
-def start(ctx):
+def start(ctx, max=2):
     ''' Start at most `max` machines per data center '''
     try:
-        InstanceManager.make().start_instances()
+        InstanceManager.make().start_instances(max)
     except BenchError as e:
         Print.error(e)
 
@@ -95,15 +95,15 @@ def install(ctx):
 
 @task
 def remote(ctx, burst = 50, debug=False):
-    ''' Run benchmarks on GCP '''
+    ''' Run benchmarks on AWS EC2 '''
     bench_params = {
         'faults': 0,
-        'nodes': 10,
+        'nodes': 4,
         'workers': 1,
-        'collocate': True,
-        'rate': [50000],
+        # 'collocate': True,
+        'rate': [500],
         'tx_size': 512,
-        'duration': 180,
+        'duration': 120,
         'runs': 1,
         'burst' : [burst],
     }
@@ -119,7 +119,9 @@ def remote(ctx, burst = 50, debug=False):
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 512_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 200,  # ms
+        'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
+        'fallback_round': 10,  # rounds
     }
     try:
         Bench(ctx).run(bench_params, node_params, debug)
