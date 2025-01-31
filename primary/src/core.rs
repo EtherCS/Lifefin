@@ -378,11 +378,6 @@ impl Core {
             && self.consensus_mode == ConsensusMode::Optimistic
             && self.acs_manager.last_acs_round < header.round
         {
-            // self.consensus_mode = ConsensusMode::Fallback;
-            info!(
-                "Switched to fallback mode in view {}",
-                self.acs_manager.last_acs_round
-            );
             let _ = self.switch_to_fallback_mode().await;
         }
 
@@ -545,6 +540,10 @@ impl Core {
     }
 
     async fn switch_to_fallback_mode(&mut self) -> DagResult<()> {
+        info!(
+            "Switched to fallback mode in view {}",
+            self.acs_manager.last_acs_round
+        );
         self.consensus_mode = ConsensusMode::Fallback;
         let my_own_post_block = self
             .acs_manager
@@ -1067,7 +1066,7 @@ impl Core {
     }
 
     async fn process_pisa_bval(&mut self, pisa_bval: PisaBval) -> DagResult<()> {
-        info!("Processing pisa_bval_message{:?}", pisa_bval);
+        debug!("Processing pisa_bval_message{:?}", pisa_bval);
 
         // If acs is starting (round 0) we execute pisa protocol, else we execute pillar protocol.
         match pisa_bval.view.aba_round {
@@ -1087,7 +1086,7 @@ impl Core {
             .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
             .append(&self.committee, pisa_bval.clone())
         {
-            info!("Received f + 1 bval({}, *) messages", pisa_bval.est);
+            debug!("Received f + 1 bval({}, *) messages", pisa_bval.est);
             match pisa_bval.est {
                 0 => {
                     // If bval(0, maj_r message has not been broadcast yet, we broadcast it.
@@ -1209,7 +1208,7 @@ impl Core {
                 .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
                 .enough_bvals_for_quorum(&self.committee, pisa_bval.est)
             {
-                info!("Received 2f + 1 bval({}, *) messages", pisa_bval.est);
+                debug!("Received 2f + 1 bval({}, *) messages", pisa_bval.est);
                 self.acs_manager
                     .acs_fin
                     .add_bin_value(pisa_bval.view, pisa_bval.est);
@@ -1264,7 +1263,7 @@ impl Core {
             .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
             .append(&self.committee, pillar_bval.clone())
         {
-            info!("Received f + 1 bval({}, *) messages", pillar_bval.est);
+            debug!("Received f + 1 bval({}, *) messages", pillar_bval.est);
             if let Some(message) = match pillar_bval.est {
                 0 => {
                     if !self.acs_manager.acs_fin.bval_0_sent {
@@ -1333,7 +1332,7 @@ impl Core {
                 .or_insert_with(|| Box::new(PisaBvalAggregator::new()))
                 .enough_bvals_for_quorum(&self.committee, pillar_bval.est)
             {
-                info!("Received 2f + 1 bval({}, *) messages", pillar_bval.est);
+                debug!("Received 2f + 1 bval({}, *) messages", pillar_bval.est);
                 self.acs_manager
                     .acs_fin
                     .add_bin_value(pillar_bval.view.clone(), pillar_bval.est);
@@ -1399,7 +1398,7 @@ impl Core {
     }
 
     async fn process_pisa_aux_start(&mut self, pisa_aux: PisaAux) -> DagResult<()> {
-        info!("Processing pisa aux message {:?}", pisa_aux);
+        debug!("Processing pisa aux message {:?}", pisa_aux);
 
         // We are expecting n - f or 2f + 1 aux(*, *) messages.
         if self
@@ -1408,7 +1407,7 @@ impl Core {
             .or_insert_with(|| Box::new(PisaAuxAggregator::new()))
             .append(&self.committee, pisa_aux.clone())
         {
-            info!("Received n - f or 2f + 1 aux(*, *) messages");
+            debug!("Received n - f or 2f + 1 aux(*, *) messages");
             let vals_r = self
                 .pisa_aux_aggregators
                 .entry(pisa_aux.view.clone())
@@ -2178,7 +2177,6 @@ impl Core {
                 // We receive fallback message from consensus module, indicating we fail to commit blocks for a timeout
                 Some(_signal) = self.rx_fallback.recv() => {
                     if self.consensus_mode == ConsensusMode::Optimistic {
-                        info!("Switched to fallback mode in view {}", self.acs_manager.last_acs_round);
                         self.switch_to_fallback_mode().await
                     } else {
                         Ok(())

@@ -7,7 +7,7 @@ use config::Committee;
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
-use log::{debug, info};
+use log::debug;
 use network::{CancelHandler, ReliableSender};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -845,7 +845,7 @@ impl ACSFin {
     }
 
     pub fn try_decide_round_0(&mut self, vals_r: Vec<BinaryValue>, committee: &Committee) -> bool {
-        info!("Trying to decide round 0");
+        debug!("Trying to decide round 0");
         // Cases b = 1 or b = 0
         if let Some(count) = self.v2_check(vals_r.clone(), 1) {
             if count >= committee.majority_threshold() {
