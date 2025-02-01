@@ -51,6 +51,8 @@ class LogParser:
             primary_ips,
             leader_commits,
             non_leader_commits,
+            acs_leader_proposals,
+            acs_leader_commits,
             fallback_instances,
             optimistic_instances,
         ) = zip(*results)
@@ -59,6 +61,12 @@ class LogParser:
         self.leader_commits = self._merge_results([x.items() for x in leader_commits])
         self.non_leader_commits = self._merge_results(
             [x.items() for x in non_leader_commits]
+        )
+        self.acs_leader_proposals = self._merge_results(
+            [x.items() for x in acs_leader_proposals]
+        )
+        self.acs_leader_commits = self._merge_results(
+            [x.items() for x in acs_leader_commits]
         )
         self.fallback_instances = self._merge_results(
             [x.items() for x in fallback_instances]
@@ -129,6 +137,14 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         non_leader_commits = self._merge_results([tmp])
 
+        tmp = findall(r"\[(.*Z) .* Created ACS block ([^ ]+) header", log)
+        tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        acs_leader_proposals = self._merge_results([tmp])
+
+        tmp = findall(r"\[(.*Z) .* Committed ACS Leader ([^ ]+) header", log)
+        tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        acs_leader_commits = self._merge_results([tmp])
+
         tmp = findall(r"\[(.*Z) .* Switched to fallback mode in view (\d+)", log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         fallback_instances = self._merge_results([tmp])
@@ -156,6 +172,8 @@ class LogParser:
             ip,
             leader_commits,
             non_leader_commits,
+            acs_leader_proposals,
+            acs_leader_commits,
             fallback_instances,
             optimistic_instances,
         )
@@ -233,6 +251,14 @@ class LogParser:
                     latency += [end - start]
         return mean(latency) if latency else 0
 
+    def _consensus_acs_leader_latency(self):
+        latency = [
+            c - self.acs_leader_proposals[d]
+            for d, c in self.acs_leader_commits.items()
+            if d in self.acs_leader_proposals
+        ]
+        return mean(latency) if latency else 0
+
     def _fallback_latency(self):
         latency = []
         # for fallback, optimistic in zip (self.fallback_instances, self.optimistic_instances):
@@ -256,6 +282,7 @@ class LogParser:
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
+        acs_leader_consensus_latency = self._consensus_acs_leader_latency() * 1_000
         fallback_latency = self._fallback_latency() * 1_000
 
         csv_file_path = (
@@ -307,6 +334,7 @@ class LogParser:
             f" End-to-end BPS: {round(end_to_end_bps):,} B/s\n"
             f" End-to-end latency: {round(end_to_end_latency):,} ms\n"
             "\n"
+            f" ACS Leader latency: {round(acs_leader_consensus_latency):,} ms\n"
             f" Fallback latency: {round(fallback_latency):,} ms\n"
             "-----------------------------------------\n"
         )

@@ -323,7 +323,6 @@ impl Consensus {
                         }
                     }
                     self.commit_leader(leader.clone(), &mut state).await;
-
                 }
             }
             if now - self.last_commit_time > Duration::from_secs(self.acs_timeout) {
@@ -385,6 +384,10 @@ impl Consensus {
             if let Err(e) = self.tx_output.send(certificate).await {
                 warn!("Failed to output certificate: {} with header", e);
             }
+        }
+        #[cfg(feature = "benchmark")]
+        {
+            info!("Committed ACS Leader {} header", leader.header.id);
         }
     }
 

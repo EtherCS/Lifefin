@@ -551,6 +551,10 @@ impl Core {
             .await;
         self.acs_manager.current_post_block = my_own_post_block.clone();
 
+        info!(
+            "Created ACS block {} header",
+            self.current_header.clone().id
+        );
         // PoST propose stage:
         // Serialize the meta post instance into bytes using bincode or a similar serialization tool.
         let bytes = bincode::serialize(&PrimaryMessage::MetaPoSTBlockData(
