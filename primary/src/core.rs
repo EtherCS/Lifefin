@@ -541,7 +541,7 @@ impl Core {
 
     async fn switch_to_fallback_mode(&mut self) -> DagResult<()> {
         info!(
-            "Switched to fallback mode in view {}",
+            "Switched to fallback mode in {} view",
             self.acs_manager.last_acs_round
         );
         self.consensus_mode = ConsensusMode::Fallback;
@@ -1047,11 +1047,22 @@ impl Core {
         );
         self.consensus_mode = ConsensusMode::Optimistic;
         info!(
-            "Switched to optimistic mode in view {}",
+            "Switched to optimistic mode in {} view",
             last_acs_instance_view
         );
 
+        info!(
+            "ACS view {} with end size {} B",
+            last_acs_instance_view,
+            self.acs_manager.total_size()
+        );
         self.acs_manager.reset(acs_output.acs_round());
+
+        info!(
+            "ACS view {} with reset size {} B",
+            last_acs_instance_view,
+            self.acs_manager.total_size()
+        );
 
         // help others to terminate the ACS
         let addresses = self

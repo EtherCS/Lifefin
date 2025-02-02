@@ -190,6 +190,10 @@ impl Signature {
         Signature { part1, part2 }
     }
 
+    pub fn total_size(&self) -> usize {
+        self.part1.len() + self.part2.len()
+    }
+
     fn flatten(&self) -> [u8; 64] {
         [self.part1, self.part2]
             .concat()

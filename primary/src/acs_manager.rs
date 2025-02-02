@@ -14,6 +14,7 @@ use crate::{
 };
 use config::Committee;
 use crypto::{PublicKey, SignatureService};
+use std::mem;
 
 // #[derive(Clone)]
 pub struct ACSManager {
@@ -114,5 +115,39 @@ impl ACSManager {
             panic!("Pisa protocol: Authority not found");
         }
         None
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+
+        size += self.acs_output.total_size();
+        size += self.acs_fin.total_size();
+        size += self
+            .last_seen_post_blocks
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self
+            .last_seen_mvba_proposals
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self.current_post_block.total_size();
+        size += self.meta_post_vote_aggregator.total_size();
+        size += self.mvba_proposal_vote_aggregator.total_size();
+        size += self
+            .post_vote_aggregators
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self.post_block_aggregator.total_size();
+        size += self
+            .mvba_vote_aggregators
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self.mvba_proposal_aggregator.total_size();
+
+        size
     }
 }

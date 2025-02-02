@@ -11,7 +11,7 @@ use crate::messages::{
 use config::{Committee, Stake};
 use crypto::{PublicKey, Signature};
 use std::collections::HashSet;
-use std::fmt::{self};
+use std::{fmt, mem};
 
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
@@ -191,6 +191,18 @@ impl PoSTVoteAggregator {
         }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .votes
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self.used.iter().map(|k| mem::size_of_val(k)).sum::<usize>();
+
+        size
+    }
+
     pub fn append(
         &mut self,
         vote: PoSTBlockVote,
@@ -241,6 +253,18 @@ impl MVBAProposalVoteAggregator {
         }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .votes
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self.used.iter().map(|k| mem::size_of_val(k)).sum::<usize>();
+
+        size
+    }
+
     pub fn append(
         &mut self,
         vote: MVBAVote,
@@ -288,6 +312,18 @@ impl PoSTAggregator {
             post_blocks: Vec::new(),
             used: HashSet::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .post_blocks
+            .iter()
+            .map(|v| v.total_size())
+            .sum::<usize>();
+        size += self.used.iter().map(|k| mem::size_of_val(k)).sum::<usize>();
+
+        size
     }
 
     pub fn append(
@@ -358,6 +394,18 @@ impl CertifiedPoSTVoteAggregator {
         }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .post_votes
+            .iter()
+            .map(|v| v.total_size())
+            .sum::<usize>();
+        size += self.used.iter().map(|k| mem::size_of_val(k)).sum::<usize>();
+
+        size
+    }
+
     pub fn append(
         &mut self,
         post_vote: CertifiedPoSTBlockVote,
@@ -399,6 +447,18 @@ impl MVBAAggregator {
             mvba_proposals: Vec::new(),
             used: HashSet::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .mvba_proposals
+            .iter()
+            .map(|v| v.total_size())
+            .sum::<usize>();
+        size += self.used.iter().map(|k| mem::size_of_val(k)).sum::<usize>();
+
+        size
     }
 
     pub fn append(
@@ -452,6 +512,18 @@ impl CertifiedMVBAVoteAggregator {
             mvba_votes: Vec::new(),
             used: HashSet::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .mvba_votes
+            .iter()
+            .map(|v| v.total_size())
+            .sum::<usize>();
+        size += self.used.iter().map(|k| mem::size_of_val(k)).sum::<usize>();
+
+        size
     }
 
     pub fn append(

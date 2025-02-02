@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::BufWriter;
 use std::io::Write as _;
+use std::mem;
 use std::net::SocketAddr;
 use thiserror::Error;
 
@@ -156,6 +157,17 @@ impl Committee {
     /// Returns the index of a specific authority.
     pub fn author_index(&self, name: &PublicKey) -> Option<usize> {
         self.authorities.keys().position(|x| x == name)
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .authorities
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + mem::size_of_val(v))
+            .sum::<usize>();
+
+        size
     }
 
     /// Returns the authority at a specific index.

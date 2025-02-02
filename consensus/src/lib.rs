@@ -336,7 +336,6 @@ impl Consensus {
     }
 
     async fn commit_leader(&mut self, leader: Certificate, state: &mut State) {
-        debug!("ACS direct commit leader: {:?}", leader);
         let mut sequence = Vec::new();
         for leader in self.order_leaders(&leader, &state).iter().rev() {
             // Starting from the oldest leader, flatten the sub-dag referenced by the leader.

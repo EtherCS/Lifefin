@@ -12,7 +12,7 @@ use network::{CancelHandler, ReliableSender};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
-use std::fmt;
+use std::{fmt, mem};
 
 pub type MVBARoundNumber = Round;
 pub type ABARoundNumber = Round;
@@ -47,6 +47,12 @@ impl MetaPoSTBlockData {
             signature,
             ..meta_post
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.stuck_block.total_size();
+        size
     }
 
     pub fn round(&self) -> Round {
@@ -244,6 +250,12 @@ impl CertifiedPoSTBlockVote {
         Self { signature, ..vote }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.signature.total_size();
+        size
+    }
+
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the authority has voting rights.
         ensure!(
@@ -312,6 +324,12 @@ impl MVBAProposal {
             signature,
             ..proposal
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.signature.total_size();
+        size
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -406,6 +424,16 @@ pub struct CertifiedMVBA {
 }
 
 impl CertifiedMVBA {
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .votes
+            .iter()
+            .map(|(_, s)| s.total_size())
+            .sum::<usize>();
+        size
+    }
+
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Check the embedded mvba.
         self.proposal.verify(committee)?;
@@ -472,6 +500,13 @@ impl CertifiedMVBAVote {
         Self { signature, ..vote }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.certified_mvba.total_size();
+        size += self.signature.total_size();
+        size
+    }
+
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the authority has voting rights.
         ensure!(
@@ -527,6 +562,12 @@ impl ACSOutput {
             acs_round,
             vertices,
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.vertices.iter().map(|v| v.total_size()).sum::<usize>();
+        size
     }
 
     pub fn acs_round(&self) -> Round {
@@ -661,6 +702,35 @@ impl ACSFin {
             bval_1_sent: false,
             decided: false,
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+
+        size += self
+            .bin_values
+            .iter()
+            .map(|(k, v)| {
+                let key_size = mem::size_of_val(k);
+                let value_size =
+                    v.iter().map(|bv| mem::size_of_val(bv)).sum::<usize>() + mem::size_of_val(v);
+                key_size + value_size
+            })
+            .sum::<usize>();
+        size += self
+            .majs
+            .iter()
+            .map(|(k, v)| {
+                let key_size = mem::size_of_val(k);
+                let value_size =
+                    v.iter().map(|bv| mem::size_of_val(bv)).sum::<usize>() + mem::size_of_val(v);
+                key_size + value_size
+            })
+            .sum::<usize>();
+
+        size += self.committee.total_size();
+
+        size
     }
 
     pub fn propose(&mut self, vi: BinaryValue) {

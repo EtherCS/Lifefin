@@ -55,6 +55,8 @@ class LogParser:
             acs_leader_commits,
             fallback_instances,
             optimistic_instances,
+            acs_start_size,
+            acs_end_size,
         ) = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
@@ -73,6 +75,12 @@ class LogParser:
         )
         self.optimistic_instances = self._merge_results(
             [x.items() for x in optimistic_instances]
+        )
+        self.acs_start_size = self._merge_start_size_results(
+            [x.items() for x in acs_start_size]
+        )
+        self.acs_end_size = self._merge_end_size_results(
+            [x.items() for x in acs_end_size]
         )
 
         # Parse the workers logs.
@@ -98,6 +106,24 @@ class LogParser:
             for k, v in x:
                 if not k in merged or merged[k] > v:
                     merged[k] = v
+        return merged
+
+    def _merge_start_size_results(self, input):
+        # Keep the smallest size.
+        merged = {}
+        for x in input:
+            for k, v in x:
+                if not k in merged or merged[k] > int(v):
+                    merged[k] = int(v)
+        return merged
+
+    def _merge_end_size_results(self, input):
+        # Keep the largest size.
+        merged = {}
+        for x in input:
+            for k, v in x:
+                if not k in merged or merged[k] < int(v):
+                    merged[k] = int(v)
         return merged
 
     def _parse_clients(self, log):
@@ -145,13 +171,21 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         acs_leader_commits = self._merge_results([tmp])
 
-        tmp = findall(r"\[(.*Z) .* Switched to fallback mode in view (\d+)", log)
+        tmp = findall(r"\[(.*Z) .* Switched to fallback mode in (\d+) view", log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         fallback_instances = self._merge_results([tmp])
 
-        tmp = findall(r"\[(.*Z) .* Switched to optimistic mode in view (\d+)", log)
+        tmp = findall(r"\[(.*Z) .* Switched to optimistic mode in (\d+) view", log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         optimistic_instances = self._merge_results([tmp])
+
+        tmp = findall(r"\[.*Z .* ACS view (\d+) with reset size (\d+) B", log)
+        tmp = [(v, s) for v, s in tmp]
+        acs_start_size = self._merge_start_size_results([tmp])
+
+        tmp = findall(r"\[.*Z .* ACS view (\d+) with end size (\d+) B", log)
+        tmp = [(v, s) for v, s in tmp]
+        acs_end_size = self._merge_end_size_results([tmp])
 
         configs = {
             "header_size": int(search(r"Header size .* (\d+)", log).group(1)),
@@ -176,6 +210,8 @@ class LogParser:
             acs_leader_commits,
             fallback_instances,
             optimistic_instances,
+            acs_start_size,
+            acs_end_size,
         )
 
     def _parse_workers(self, log):
@@ -267,6 +303,14 @@ class LogParser:
                 latency += [self.optimistic_instances[view] - time]
         return mean(latency) if latency else 0
 
+    def _acs_data_size(self):
+        size = [
+            end - self.acs_start_size[view]
+            for view, end in self.acs_end_size.items()
+            if view in self.acs_start_size
+        ]
+        return mean(size) if size else 0
+
     def result(self):
         header_size = self.configs[0]["header_size"]
         max_header_delay = self.configs[0]["max_header_delay"]
@@ -284,6 +328,7 @@ class LogParser:
         end_to_end_latency = self._end_to_end_latency() * 1_000
         acs_leader_consensus_latency = self._consensus_acs_leader_latency() * 1_000
         fallback_latency = self._fallback_latency() * 1_000
+        acs_data_size = self._acs_data_size()
 
         csv_file_path = (
             f"benchmark_{self.committee_size}_{header_size}_{batch_size}.csv"
@@ -336,6 +381,7 @@ class LogParser:
             "\n"
             f" ACS Leader latency: {round(acs_leader_consensus_latency):,} ms\n"
             f" Fallback latency: {round(fallback_latency):,} ms\n"
+            f" ACS data size: {round(acs_data_size):,} B\n"
             "-----------------------------------------\n"
         )
 

@@ -9,7 +9,7 @@ use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryInto;
-use std::fmt;
+use std::{fmt, mem};
 
 pub type BinaryValue = u8; // 0, 1, or 2 (None)
 
@@ -85,6 +85,31 @@ impl Header {
             signature,
             ..header
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+
+        size += self
+            .payload
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + mem::size_of_val(v))
+            .sum::<usize>();
+        size += self
+            .parents
+            .iter()
+            .map(|x| mem::size_of_val(x))
+            .sum::<usize>();
+        size += self
+            .post_blocks
+            .iter()
+            .map(|x| x.total_size())
+            .sum::<usize>();
+
+        size += self.timeout_cert.total_size();
+        size += self.no_vote_cert.total_size();
+
+        size
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -343,6 +368,18 @@ impl TimeoutCert {
         }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+
+        size += self
+            .timeouts
+            .iter()
+            .map(|(x, _)| mem::size_of_val(x))
+            .sum::<usize>();
+
+        size
+    }
+
     // Adds a timeout to the certificate.
     pub fn add_timeout(&mut self, author: PublicKey, signature: Signature) -> DagResult<()> {
         // Ensure this public key hasn't already submitted a timeout for this round
@@ -391,6 +428,18 @@ impl NoVoteCert {
             round,
             no_votes: Vec::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+
+        size += self
+            .no_votes
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + mem::size_of_val(v))
+            .sum::<usize>();
+
+        size
     }
 
     pub fn add_no_vote(&mut self, author: PublicKey, signature: Signature) -> DagResult<()> {

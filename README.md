@@ -26,7 +26,7 @@ By default, it will run **10** nodes for **60** seconds, where nodes will be stu
  Collocate primary and workers: True
  Input rate: 5,000,000 tx/s
  Transaction size: 512 B
- Execution time: 48 s
+ Execution time: 13 s
 
  Header size: 1 B
  Max header delay: 1,000 ms
@@ -37,17 +37,18 @@ By default, it will run **10** nodes for **60** seconds, where nodes will be stu
  Max batch delay: 200 ms
 
  + RESULTS:
- Consensus TPS: 145,346 tx/s
- Consensus BPS: 74,417,319 B/s
- Consensus latency: 1,370 ms
- Consensus leader latency: 295 ms
- Consensus non leader latency: 933 ms
+ Consensus TPS: 195,176 tx/s
+ Consensus BPS: 99,930,002 B/s
+ Consensus latency: 1,239 ms
+ Consensus leader latency: 79 ms
+ Consensus non leader latency: 601 ms
 
- End-to-end TPS: 145,331 tx/s
- End-to-end BPS: 74,409,489 B/s
- End-to-end latency: 3,279 ms
+ End-to-end TPS: 195,059 tx/s
+ End-to-end BPS: 99,870,214 B/s
+ End-to-end latency: 2,330 ms
 
- ACS Leader latency: 210 ms
- Fallback latency: 114 ms
+ ACS Leader latency: 97 ms
+ Fallback latency: 94 ms
+ ACS data size: 145,681 B
 -----------------------------------------
 ```
