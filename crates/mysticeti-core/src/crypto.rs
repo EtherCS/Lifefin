@@ -35,6 +35,11 @@ pub const PISA_ABA_DIGEST_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
 pub struct BlockDigest([u8; BLOCK_DIGEST_SIZE]);
+impl BlockDigest {
+    pub fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Default, Hash)]
 pub struct PoSTBlockDigest([u8; POST_BLOCK_DIGEST_SIZE]);
@@ -53,6 +58,11 @@ pub struct PublicKey(ed25519_consensus::VerificationKey);
 
 #[derive(Clone, Copy, Eq, Ord, PartialOrd, PartialEq, Hash, Debug)]
 pub struct SignatureBytes([u8; SIGNATURE_SIZE]);
+impl SignatureBytes {
+    pub fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
 
 // Box ensures value is not copied in memory when Signer itself is moved around for better security
 #[derive(Serialize, Deserialize, Clone)]
@@ -489,7 +499,14 @@ impl Signer {
         authority: AuthorityIndex,
     ) -> SignatureBytes {
         let mut hasher = PisaABAHasher::default();
-        PisaABADigest::digest_without_signature(&mut hasher, last_acs_round, view, est, maj, authority);
+        PisaABADigest::digest_without_signature(
+            &mut hasher,
+            last_acs_round,
+            view,
+            est,
+            maj,
+            authority,
+        );
         let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
         let signature = self.0.sign(digest.as_ref());
         SignatureBytes(signature.to_bytes())
@@ -504,7 +521,14 @@ impl Signer {
         authority: AuthorityIndex,
     ) -> SignatureBytes {
         let mut hasher = PisaABAHasher::default();
-        PisaABADigest::digest_without_signature(&mut hasher, last_acs_round, view, aux1, aux2, authority);
+        PisaABADigest::digest_without_signature(
+            &mut hasher,
+            last_acs_round,
+            view,
+            aux1,
+            aux2,
+            authority,
+        );
         let digest: [u8; POST_BLOCK_DIGEST_SIZE] = hasher.finalize().into();
         let signature = self.0.sign(digest.as_ref());
         SignatureBytes(signature.to_bytes())

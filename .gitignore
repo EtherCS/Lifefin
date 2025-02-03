@@ -26,6 +26,9 @@ cobertura.xml
 *.txt
 wal
 
+# benchmark setting
+settings.yml
+
 # don't check
 .pre-commit-config.yaml
 Cargo.lock

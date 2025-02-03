@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
-    fmt,
+    fmt, mem,
 };
 
 pub type MVBARoundNumber = u64;
@@ -45,6 +45,18 @@ impl MetaPoSTBlockData {
             stuck_block,
             seen_blocks,
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.stuck_block.total_size();
+        size += self
+            .seen_blocks
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+
+        size
     }
 
     pub fn stuck_round(&self) -> RoundNumber {
@@ -168,6 +180,23 @@ impl CertifiedPoSTBlockData {
         }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.stuck_block.total_size();
+        size += self
+            .seen_blocks
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self
+            .signatures
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+
+        size
+    }
+
     pub fn update_signature(&mut self, author: PublicKey, signature: SignatureBytes) {
         if !self.signatures.iter().any(|(a, _)| a == &author) {
             self.signatures.push((author, signature));
@@ -241,6 +270,12 @@ impl MVBAProposal {
             proposal,
             signature,
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.signature.total_size();
+        size
     }
 
     pub fn digest(&self) -> MVBADigest {
@@ -343,6 +378,16 @@ impl CertifiedMVBA {
             proposal,
             signatures: Vec::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .signatures
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size
     }
 
     pub fn update_signature(&mut self, author: PublicKey, signature: SignatureBytes) {
@@ -502,6 +547,12 @@ impl PisaABABval {
         }
     }
 
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.signature.total_size();
+        size
+    }
+
     pub fn author(&self) -> AuthorityIndex {
         self.authority
     }
@@ -567,6 +618,12 @@ impl PisaABAAux {
             authority,
             signature,
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.signature.total_size();
+        size
     }
 
     pub fn author(&self) -> AuthorityIndex {
@@ -639,6 +696,37 @@ impl ACSFin {
             raba_bvals: BTreeMap::new(),
             raba_aux: BTreeMap::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.committee.total_size();
+        size += self
+            .mvbas
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self
+            .raba_bvals
+            .iter()
+            .map(|(k, v)| {
+                let key_size = mem::size_of_val(k);
+                let value_size =
+                    v.iter().map(|bv| mem::size_of_val(bv)).sum::<usize>() + mem::size_of_val(v);
+                key_size + value_size
+            })
+            .sum::<usize>();
+        size += self
+            .raba_aux
+            .iter()
+            .map(|(k, v)| {
+                let key_size = mem::size_of_val(k);
+                let value_size =
+                    v.iter().map(|aux| mem::size_of_val(aux)).sum::<usize>() + mem::size_of_val(v);
+                key_size + value_size
+            })
+            .sum::<usize>();
+        size
     }
 
     pub fn get_own_mvba(&self) -> Option<CertifiedMVBA> {

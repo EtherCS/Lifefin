@@ -10,14 +10,15 @@ use crate::{
 };
 
 use std::collections::HashMap;
+use std::mem;
 use std::{cmp::Ordering, collections::BTreeMap};
 
 #[derive(Clone)]
 pub struct ACSManager {
     authority: AuthorityIndex,
     public_key: PublicKey,
-    committee: Committee, // for verification
-    pub round: RoundNumber,   // the last round agreed by the ACS mode
+    committee: Committee,   // for verification
+    pub round: RoundNumber, // the last round agreed by the ACS mode
     last_seen_meta_post_blocks: HashMap<AuthorityIndex, MetaPoSTBlockData>,
     pub post_blocks: HashMap<AuthorityIndex, CertifiedPoSTBlockData>,
     pub acs_fin: ACSFin, // manage FIN messages
@@ -41,6 +42,28 @@ impl ACSManager {
             acs_fin: ACSFin::new(authority, committee, round),
             last_seen_mvba_proposal: HashMap::new(),
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.committee.total_size();
+        size += self
+            .last_seen_meta_post_blocks
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self
+            .post_blocks
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self
+            .last_seen_mvba_proposal
+            .iter()
+            .map(|(k, v)| mem::size_of_val(k) + v.total_size())
+            .sum::<usize>();
+        size += self.acs_fin.total_size();
+        size
     }
 
     pub fn create_own_post_block(

@@ -26,13 +26,15 @@ use crate::{
     },
 };
 
+use std::mem;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Committee {
     authorities: Vec<Authority>,
     validity_threshold: Stake, // The minimum stake required for validity
     quorum_threshold: Stake,   // The minimum stake required for quorum
-    acs_validity_threshold: Stake,  // The minimum stake required for validity in ACS
-    acs_quorum_threshold: Stake,    // The minimum stake required for quorum in ACS
+    acs_validity_threshold: Stake, // The minimum stake required for validity in ACS
+    acs_quorum_threshold: Stake, // The minimum stake required for quorum in ACS
 }
 
 impl Committee {
@@ -69,6 +71,16 @@ impl Committee {
             acs_validity_threshold,
             acs_quorum_threshold,
         })
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self
+            .authorities
+            .iter()
+            .map(|a| mem::size_of_val(a))
+            .sum::<usize>();
+        size
     }
 
     pub fn get_stake(&self, authority: AuthorityIndex) -> Option<Stake> {

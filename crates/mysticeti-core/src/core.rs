@@ -96,9 +96,8 @@ impl<H: BlockHandler> Core<H> {
         recovered: RecoveredState,
         mut wal_writer: WalWriter,
         options: CoreOptions,
-        acs_trigger_round: Option<u64>,
     ) -> Self {
-        let acs_trigger_round = acs_trigger_round.unwrap_or(0); // Provide a default value of 0
+        let acs_trigger_round = public_config.parameters.acs_trigger_round; // Provide a default value of 0
 
         let RecoveredState {
             block_store,
@@ -173,6 +172,7 @@ impl<H: BlockHandler> Core<H> {
             public_config.parameters.number_of_leaders
         );
         tracing::info!("Attack type: {}", attack_type.name());
+        tracing::info!("ACS fallback round {}", acs_trigger_round);
 
         let mut this = Self {
             block_manager,
@@ -628,6 +628,7 @@ impl<H: BlockHandler> Core<H> {
     /// 2) trigger acs timeout (which could be very long, said 10 minutes, in practice)
     /// 3) todo: almost run out of memory
     fn switch_to_fallback(&mut self) {
+        let last_acs_view = self.last_acs_output.view;
         // create own certified post block
         let my_certified_post_block = self.acs_manager.create_own_post_block(
             self.last_own_block.block.clone().reference().round,
@@ -653,27 +654,38 @@ impl<H: BlockHandler> Core<H> {
             );
             rt.block_on(self.broadcast(NetworkMessage::ProofOfStuckBlockVote(vote)));
         }
-        tracing::info!("Switching to Fallback mode");
+        tracing::info!("Switched to fallback mode in {} view", last_acs_view);
         self.consensus_mode = ConsensusMode::Fallback;
     }
 
-    pub fn switch_to_optimistic(&mut self) {
-        tracing::info!("Switching to Optimistic mode");
+    pub fn switch_to_optimistic(&mut self, last_acs_view: u64) {
+        tracing::info!("Switched to optimistic mode in {} view", last_acs_view);
         self.consensus_mode = ConsensusMode::Optimistic;
     }
 
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
+        let last_acs_view = self.last_acs_output.view;
+        tracing::info!(
+            "ACS view {} with end size {} B",
+            last_acs_view,
+            self.acs_manager.total_size()
+        );
         // help others to terminate the ACS
         let rt = Runtime::new().unwrap();
         rt.block_on(self.broadcast(NetworkMessage::ACSOutput(acs_output.clone())));
         let new_leader_block = acs_output.new_leader(&self.committer);
-        tracing::debug!("Committing ACS output in view {}", acs_output.view);
+        tracing::info!("Committing ACS output in view {}", acs_output.view);
         tracing::debug!("New leader block {:?}", new_leader_block);
         self.last_acs_output = acs_output.clone();
         // self.try_new_block_after_acs();
         self.add_blocks_after_acs(acs_output.blocks.clone());
         self.acs_manager.reset(acs_output.round);
-        self.switch_to_optimistic();
+        tracing::info!(
+            "ACS view {} with reset size {} B",
+            last_acs_view,
+            self.acs_manager.total_size()
+        );
+        self.switch_to_optimistic(last_acs_view);
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {

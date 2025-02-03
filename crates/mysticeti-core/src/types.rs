@@ -8,6 +8,12 @@ pub struct Transaction {
     data: Vec<u8>,
 }
 
+impl Transaction {
+    pub fn total_size(&self) -> usize {
+        self.data.len()
+    }
+}
+
 pub type RoundNumber = u64;
 pub type BlockDigest = crate::crypto::BlockDigest;
 pub type Stake = u64;
@@ -17,6 +23,7 @@ pub type PublicKey = crate::crypto::PublicKey;
 use std::{
     fmt,
     hash::{Hash, Hasher},
+    mem,
     ops::Range,
     time::Duration,
 };
@@ -40,6 +47,21 @@ pub enum Vote {
     Reject(Option<TransactionLocator>),
 }
 
+impl Vote {
+    pub fn total_size(&self) -> usize {
+        match self {
+            Vote::Accept => mem::size_of::<Vote>(),
+            Vote::Reject(locator) => {
+                if let Some(locator) = locator {
+                    mem::size_of::<Vote>() + locator.total_size()
+                } else {
+                    mem::size_of::<Vote>()
+                }
+            }
+        }
+    }
+}
+
 pub type EpochStatus = bool;
 
 #[derive(PartialEq, Default, Clone, Copy, Serialize, Deserialize)]
@@ -59,6 +81,15 @@ pub struct BlockReference {
     pub digest: BlockDigest,
 }
 
+impl BlockReference {
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.digest.total_size();
+
+        size
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum BaseStatement {
     /// Authority Shares a transactions, without accepting it or not.
@@ -67,6 +98,22 @@ pub enum BaseStatement {
     Vote(TransactionLocator, Vote),
     // For now only accept votes are batched
     VoteRange(TransactionLocatorRange),
+}
+
+impl BaseStatement {
+    pub fn total_size(&self) -> usize {
+        match self {
+            BaseStatement::Share(transaction) => {
+                mem::size_of::<BaseStatement>() + transaction.total_size()
+            }
+            BaseStatement::Vote(locator, vote) => {
+                mem::size_of::<BaseStatement>() + locator.total_size() + vote.total_size()
+            }
+            BaseStatement::VoteRange(locator_range) => {
+                mem::size_of::<BaseStatement>() + locator_range.total_size()
+            }
+        }
+    }
 }
 
 impl Hash for BlockReference {
@@ -187,6 +234,19 @@ impl StatementBlock {
             epoch_marker,
             signature,
         }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.reference.total_size();
+        size += self.includes.iter().map(|x| x.total_size()).sum::<usize>();
+        size += self
+            .statements
+            .iter()
+            .map(|x| x.total_size())
+            .sum::<usize>();
+        size += self.signature.total_size();
+        size
     }
 
     pub fn reference(&self) -> &BlockReference {
@@ -345,9 +405,23 @@ pub struct TransactionLocatorRange {
     offset_end_exclusive: u64,
 }
 
+impl TransactionLocatorRange {
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.block.total_size();
+        size
+    }
+}
+
 impl TransactionLocator {
     pub(crate) fn new(block: BlockReference, offset: u64) -> Self {
         Self { block, offset }
+    }
+
+    pub fn total_size(&self) -> usize {
+        let mut size = mem::size_of_val(self);
+        size += self.block.total_size();
+        size
     }
 
     pub fn block(&self) -> &BlockReference {
