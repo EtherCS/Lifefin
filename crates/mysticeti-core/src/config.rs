@@ -56,6 +56,8 @@ pub struct NodeParameters {
     pub acs_timeout: Duration,
     #[serde(default = "node_defaults::default_attack_type")]
     pub attack_type: AttackType,
+    #[serde(default = "node_defaults::default_acs_trigger_round")]
+    pub acs_trigger_round: u64,
 }
 
 pub mod node_defaults {
@@ -102,6 +104,11 @@ pub mod node_defaults {
     pub fn default_attack_type() -> acs::adversary::AttackType {
         acs::adversary::AttackType::Honest
     }
+
+    /// 0 means not the fallback test
+    pub fn default_acs_trigger_round() -> u64 {
+        0
+    }
 }
 
 impl Default for NodeParameters {
@@ -118,6 +125,7 @@ impl Default for NodeParameters {
             enable_synchronizer: node_defaults::default_enable_synchronizer(),
             acs_timeout: node_defaults::default_acs_timeout(),
             attack_type: node_defaults::default_attack_type(),
+            acs_trigger_round: node_defaults::default_acs_trigger_round(),
         }
     }
 }
@@ -188,6 +196,11 @@ impl NodePublicConfig {
             identifiers: default_with_ips.identifiers,
             parameters: node_parameters.unwrap_or_default(),
         }
+    }
+
+    pub fn with_acs_trigger_round(mut self, acs_trigger_round: u64) -> Self {
+        self.parameters.acs_trigger_round = acs_trigger_round;
+        self
     }
 
     pub fn with_ips(mut self, ips: Vec<IpAddr>) -> Self {

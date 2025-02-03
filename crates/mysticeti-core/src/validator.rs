@@ -38,10 +38,7 @@ impl Validator {
         public_config: NodePublicConfig,
         private_config: NodePrivateConfig,
         client_parameters: ClientParameters,
-        acs_trigger_round: Option<u64>,
     ) -> Result<Self> {
-        let acs_trigger_round = acs_trigger_round.unwrap_or(0); // Provide a default value of 0
-
         let network_address = public_config
             .network_address(authority)
             .ok_or(eyre!("No network address for authority {authority}"))
@@ -112,7 +109,6 @@ impl Validator {
             recovered,
             wal_writer,
             CoreOptions::default(),
-            Some(acs_trigger_round),
         );
         let network = Network::load(
             &public_config,
@@ -218,7 +214,6 @@ mod smoke_tests {
                 public_config.clone(),
                 private_config,
                 client_parameters.clone(),
-                None,
             )
             .await
             .unwrap();
@@ -264,7 +259,6 @@ mod smoke_tests {
                 public_config.clone(),
                 private_config,
                 client_parameters.clone(),
-                None,
             )
             .await
             .unwrap();
@@ -293,7 +287,6 @@ mod smoke_tests {
             public_config.clone(),
             private_config,
             client_parameters,
-            None,
         )
         .await
         .unwrap();
@@ -339,7 +332,6 @@ mod smoke_tests {
                 public_config.clone(),
                 private_config,
                 client_parameters.clone(),
-                None,
             )
             .await
             .unwrap();

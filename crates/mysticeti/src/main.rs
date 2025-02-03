@@ -5,7 +5,8 @@ use std::{
     fs,
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
-    sync::Arc, time::Duration,
+    sync::Arc,
+    time::Duration,
 };
 
 use acs::adversary::{AttackType, AttackTypeIndex};
@@ -246,7 +247,6 @@ async fn run(
         public_config.clone(),
         private_config,
         client_parameters,
-        None,
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;
@@ -294,7 +294,6 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
         public_config,
         private_config,
         client_parameters,
-        None,
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;
@@ -303,7 +302,11 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
     Ok(())
 }
 
-async fn dryacsrun(authority: AuthorityIndex, committee_size: usize, stuck_round: u64) -> Result<()> {
+async fn dryacsrun(
+    authority: AuthorityIndex,
+    committee_size: usize,
+    stuck_round: u64,
+) -> Result<()> {
     tracing::warn!(
         "Starting validator {authority} in dryacsrun mode (committee size: {committee_size})"
     );
@@ -311,7 +314,8 @@ async fn dryacsrun(authority: AuthorityIndex, committee_size: usize, stuck_round
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default();
     let node_parameters = NodeParameters::default().with_acs_timeout(Duration::from_secs(600));
-    let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
+    let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters))
+        .with_acs_trigger_round(stuck_round);
 
     let working_dir = PathBuf::from(format!("dryacsrun-validator-{authority}"));
     let mut all_private_config =
@@ -343,7 +347,6 @@ async fn dryacsrun(authority: AuthorityIndex, committee_size: usize, stuck_round
         public_config,
         private_config,
         client_parameters,
-        Some(stuck_round),
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;
@@ -370,7 +373,9 @@ async fn dryattackrun(
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default();
-    let node_parameters = NodeParameters::default().with_number_of_leaders(1).with_attack_type(attack_type);
+    let node_parameters = NodeParameters::default()
+        .with_number_of_leaders(1)
+        .with_attack_type(attack_type);
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryattackrun-validator-{authority}"));
@@ -403,7 +408,6 @@ async fn dryattackrun(
         public_config,
         private_config,
         client_parameters,
-        None,
     )
     .await?;
     let (network_result, _metrics_result) = validator.await_completion().await;

@@ -29,6 +29,8 @@ wal
 # benchmark setting
 settings.yml
 
+dagACS.code-workspace
+
 # don't check
 .pre-commit-config.yaml
 Cargo.lock
