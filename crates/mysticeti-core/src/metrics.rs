@@ -9,19 +9,10 @@ use std::{
 };
 
 use prometheus::{
-    register_counter_vec_with_registry,
-    register_histogram_vec_with_registry,
-    register_int_counter_vec_with_registry,
-    register_int_counter_with_registry,
-    register_int_gauge_vec_with_registry,
-    register_int_gauge_with_registry,
-    CounterVec,
-    HistogramVec,
-    IntCounter,
-    IntCounterVec,
-    IntGauge,
-    IntGaugeVec,
-    Registry,
+    register_counter_vec_with_registry, register_histogram_vec_with_registry,
+    register_int_counter_vec_with_registry, register_int_counter_with_registry,
+    register_int_gauge_vec_with_registry, register_int_gauge_with_registry, CounterVec,
+    HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Registry,
 };
 use tabled::{Table, Tabled};
 use tokio::time::Instant;
@@ -51,6 +42,10 @@ pub struct Metrics {
     pub committed_leaders_total: IntCounterVec,
     pub leader_timeout_total: IntCounter,
     pub inter_block_latency_s: HistogramVec,
+    pub leader_latency_s: HistogramVec, // record the latency of committing a leader
+    pub acs_leader_latency_s: HistogramVec, // record the latency of committing acs leader
+    pub acs_data_size_bytes: HistogramVec, // record the data size of performing an acs instance
+    pub acs_duration_s: HistogramVec,   // record the duration of performing an acs instance
 
     pub block_store_unloaded_blocks: IntCounter,
     pub block_store_loaded_blocks: IntCounter,
@@ -221,6 +216,34 @@ impl Metrics {
             inter_block_latency_s: register_histogram_vec_with_registry!(
                 "inter_block_latency_s",
                 "Buckets measuring the inter-block latency in seconds",
+                &["workload"],
+                LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            ).unwrap(),
+            leader_latency_s: register_histogram_vec_with_registry!(
+                "leader_latency_s",
+                "Buckets measuring the latency of committing leader in seconds",
+                &["workload"],
+                LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            ).unwrap(),
+            acs_leader_latency_s: register_histogram_vec_with_registry!(
+                "acs_leader_latency_s",
+                "Buckets measuring the latency of committing acs leader in seconds",
+                &["workload"],
+                LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            ).unwrap(),
+            acs_data_size_bytes: register_histogram_vec_with_registry!(
+                "acs_data_size_bytes",
+                "Buckets measuring the data size of performing an acs instance",
+                &["workload"],
+                LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            ).unwrap(),
+            acs_duration_s: register_histogram_vec_with_registry!(
+                "acs_duration_s",
+                "Buckets measuring the duration of performing an acs instance",
                 &["workload"],
                 LATENCY_SEC_BUCKETS.to_vec(),
                 registry,

@@ -35,7 +35,7 @@ use crate::{
     epoch_close::EpochManager,
     metrics::{Metrics, UtilizationTimerVecExt},
     network::NetworkMessage,
-    runtime::timestamp_utc,
+    runtime::{self, timestamp_utc},
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
     types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, Stake, StatementBlock},
@@ -71,6 +71,7 @@ pub struct Core<H: BlockHandler> {
     last_commit_time: Instant,
     last_acs_output: ACSOutput,
     acs_trigger_round: u64, // (test only): nodes enter ACS mode at this round
+    last_acs_start_time: Duration, // (for benchmark measurement only) the time when starting the ACS
     pub network_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
 }
 
@@ -199,6 +200,7 @@ impl<H: BlockHandler> Core<H> {
             last_commit_time: Instant::now(),
             last_acs_output: ACSOutput::new(0, 0, vec![]),
             acs_trigger_round,
+            last_acs_start_time: Duration::from_secs(0),
             network_connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
@@ -628,6 +630,8 @@ impl<H: BlockHandler> Core<H> {
     /// 2) trigger acs timeout (which could be very long, said 10 minutes, in practice)
     /// 3) todo: almost run out of memory
     fn switch_to_fallback(&mut self) {
+        // update the start time of the ACS
+        self.last_acs_start_time = runtime::timestamp_utc();
         let last_acs_view = self.last_acs_output.view;
         // create own certified post block
         let my_certified_post_block = self.acs_manager.create_own_post_block(
@@ -665,27 +669,46 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn commit_acs(&mut self, acs_output: ACSOutput) {
         let last_acs_view = self.last_acs_output.view;
+        let after_acs_size = self.acs_manager.total_size();
         tracing::info!(
             "ACS view {} with end size {} B",
             last_acs_view,
-            self.acs_manager.total_size()
+            after_acs_size
         );
         // help others to terminate the ACS
         let rt = Runtime::new().unwrap();
         rt.block_on(self.broadcast(NetworkMessage::ACSOutput(acs_output.clone())));
         let new_leader_block = acs_output.new_leader(&self.committer);
         tracing::info!("Committing ACS output in view {}", acs_output.view);
-        tracing::debug!("New leader block {:?}", new_leader_block);
+        tracing::info!("ACS new leader is: {}", new_leader_block.author());
+        self.committer
+            .add_updated_leader(new_leader_block.round(), new_leader_block.author());
         self.last_acs_output = acs_output.clone();
-        // self.try_new_block_after_acs();
         self.add_blocks_after_acs(acs_output.blocks.clone());
+
         self.acs_manager.reset(acs_output.round);
+
+        // record the data size of an acs instance
+        let before_acs_size = self.acs_manager.total_size();
+        self.metrics
+            .acs_data_size_bytes
+            .with_label_values(&["shared"])
+            .observe(before_acs_size as f64);
         tracing::info!(
             "ACS view {} with reset size {} B",
             last_acs_view,
-            self.acs_manager.total_size()
+            before_acs_size
         );
+
         self.switch_to_optimistic(last_acs_view);
+        // record the acs time
+        let current_time = runtime::timestamp_utc();
+        let duration = (current_time - self.last_acs_start_time).as_secs_f64();
+        self.metrics
+            .acs_duration_s
+            .with_label_values(&["shared"])
+            .observe(duration);
+        tracing::info!("ACS view {} with duration {} s", last_acs_view, duration);
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -916,6 +939,34 @@ impl<H: BlockHandler> Core<H> {
         // todo: should ideally come from execution result of epoch smart contract
         if self.last_commit_leader.round() > self.rounds_in_epoch {
             self.epoch_manager.epoch_change_begun();
+        }
+
+        // record the committed time of leader blocks
+        let current_timestamp = runtime::timestamp_utc();
+        for leader in &sequence {
+            let leader_timestamp = leader.meta_creation_time();
+            let leader_latency = current_timestamp.saturating_sub(leader_timestamp);
+            if self.committer.is_acs_leader(leader.round()) {
+                self.metrics
+                    .acs_leader_latency_s
+                    .with_label_values(&["shared"])
+                    .observe(leader_latency.as_secs_f64());
+                tracing::info!(
+                    "ACS leader {} latency: {} s",
+                    leader.reference(),
+                    leader_latency.as_secs_f64()
+                )
+            } else {
+                self.metrics
+                    .leader_latency_s
+                    .with_label_values(&["shared"])
+                    .observe(leader_latency.as_secs_f64());
+                tracing::info!(
+                    "Leader {} latency: {} s",
+                    leader.reference(),
+                    leader_latency.as_secs_f64()
+                )
+            }
         }
 
         sequence

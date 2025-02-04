@@ -42,7 +42,6 @@ impl UniversalCommitter {
                     "Trying to decide {} with {committer}",
                     format_authority_round(leader, round)
                 );
-
                 // Try to directly decide the leader.
                 let mut status = committer.try_direct_decide(leader, round);
                 self.update_metrics(&status, true);
@@ -82,6 +81,20 @@ impl UniversalCommitter {
             .iter()
             .filter_map(|committer| committer.elect_leader(round))
             .collect()
+    }
+
+    /// Update leader nodes after ACS instances
+    pub fn add_updated_leader(&mut self, round: RoundNumber, leader: AuthorityIndex) {
+        for committer in self.committers.iter_mut() {
+            committer.add_updated_leader(round, leader);
+        }
+    }
+
+    /// return true if the round is decided by the acs instance
+    pub fn is_acs_leader(&self, round: RoundNumber) -> bool {
+        self.committers
+            .iter()
+            .any(|committer| committer.is_acs_leader(round))
     }
 
     /// Update metrics.

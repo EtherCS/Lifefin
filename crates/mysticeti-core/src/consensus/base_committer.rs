@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fmt::Display, sync::Arc};
+use std::{collections::BTreeMap, fmt::Display, sync::Arc};
 
 use super::{LeaderStatus, DEFAULT_WAVE_LENGTH};
 use crate::{
@@ -47,6 +47,8 @@ pub struct BaseCommitter {
     block_store: BlockStore,
     /// The options used by this committer
     options: BaseCommitterOptions,
+    /// Updated leader via acs
+    updated_leader: BTreeMap<RoundNumber, AuthorityIndex>,
 }
 
 impl BaseCommitter {
@@ -55,7 +57,21 @@ impl BaseCommitter {
             committee,
             block_store,
             options: BaseCommitterOptions::default(),
+            updated_leader: BTreeMap::new(),
         }
+    }
+
+    pub fn add_updated_leader(&mut self, round: RoundNumber, leader: AuthorityIndex) {
+        self.updated_leader.insert(round, leader);
+    }
+
+    /// Check whether the specified round is an acs leader
+    pub fn is_acs_leader(&self, round: RoundNumber) -> bool {
+        self.updated_leader.contains_key(&round)
+    }
+
+    pub fn remove_updated_leader(&mut self, round: RoundNumber) {
+        self.updated_leader.remove(&round);
     }
 
     pub fn with_options(mut self, options: BaseCommitterOptions) -> Self {
@@ -86,6 +102,11 @@ impl BaseCommitter {
     /// with different leader offsets elect different leaders for the same round number. This function
     /// returns `None` if there are no leaders for the specified round.
     pub fn elect_leader(&self, round: RoundNumber) -> Option<AuthorityIndex> {
+        // return the updated leader if exists
+        if self.updated_leader.contains_key(&round) {
+            return self.updated_leader.get(&round).copied();
+        }
+
         let wave = self.wave_number(round);
         if self.leader_round(wave) != round {
             return None;
