@@ -183,7 +183,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             "curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
             "echo \"source $HOME/.cargo/env\" | tee -a ~/.bashrc",
             "source $HOME/.cargo/env",
-            "rustup update stable",
+            "rustup default stable",
             // Create the working directory.
             &format!("mkdir -p {working_dir}"),
             // Clone the repo.
@@ -224,7 +224,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
         let commit = &self.settings.repository.commit;
         let command = [
             &format!("git fetch origin {commit}"),
-            &format!("(git checkout -b {commit} || git checkout -f origin/{commit})"),
+            &format!("git checkout -f origin/{commit}"),
             "source $HOME/.cargo/env",
             "RUSTFLAGS=-Ctarget-cpu=native cargo build --release",
         ]
