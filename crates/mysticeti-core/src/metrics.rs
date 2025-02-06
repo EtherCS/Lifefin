@@ -70,6 +70,7 @@ pub struct Metrics {
     pub transaction_certified_latency: HistogramSender<Duration>,
     pub certificate_committed_latency: HistogramSender<Duration>,
     pub transaction_committed_latency: HistogramSender<Duration>,
+    pub leader_committed_latency: HistogramSender<Duration>,
 
     pub proposed_block_size_bytes: HistogramSender<usize>,
     pub proposed_block_transaction_count: HistogramSender<usize>,
@@ -87,6 +88,7 @@ pub struct MetricReporter {
     pub transaction_certified_latency: HistogramReporter<Duration>,
     pub certificate_committed_latency: HistogramReporter<Duration>,
     pub transaction_committed_latency: HistogramReporter<Duration>,
+    pub leader_committed_latency: HistogramReporter<Duration>,
 
     pub proposed_block_size_bytes: HistogramReporter<usize>,
     pub proposed_block_transaction_count: HistogramReporter<usize>,
@@ -113,6 +115,7 @@ impl Metrics {
         let (transaction_certified_latency_hist, transaction_certified_latency) = histogram();
         let (certificate_committed_latency_hist, certificate_committed_latency) = histogram();
         let (transaction_committed_latency_hist, transaction_committed_latency) = histogram();
+        let (leader_committed_latency_hist, leader_committed_latency) = histogram();
 
         let (proposed_block_size_bytes_hist, proposed_block_size_bytes) = histogram();
         let (proposed_block_transaction_count_hist, proposed_block_transaction_count) = histogram();
@@ -146,6 +149,11 @@ impl Metrics {
                 transaction_committed_latency_hist,
                 registry,
                 "transaction_committed_latency",
+            ),
+            leader_committed_latency: HistogramReporter::new_in_registry(
+                leader_committed_latency_hist,
+                registry,
+                "leader_committed_latency",
             ),
 
             proposed_block_size_bytes: HistogramReporter::new_in_registry(
@@ -365,6 +373,7 @@ impl Metrics {
             transaction_certified_latency,
             certificate_committed_latency,
             transaction_committed_latency,
+            leader_committed_latency,
 
             proposed_block_size_bytes,
             proposed_block_transaction_count,

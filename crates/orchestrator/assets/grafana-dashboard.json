@@ -264,6 +264,18 @@
           "legendFormat": "Cert commit p90",
           "range": true,
           "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "avg(leader_committed_latency) / 1000",
+          "hide": false,
+          "legendFormat": "Leader commit latency",
+          "range": true,
+          "refId": "G"
         }
       ],
       "title": "Latency(ms)",

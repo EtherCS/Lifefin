@@ -958,9 +958,8 @@ impl<H: BlockHandler> Core<H> {
                 )
             } else {
                 self.metrics
-                    .leader_latency_s
-                    .with_label_values(&["shared"])
-                    .observe(leader_latency.as_secs_f64());
+                    .leader_committed_latency
+                    .observe(leader_latency);
                 tracing::info!(
                     "Leader {} latency: {} s",
                     leader.reference(),
