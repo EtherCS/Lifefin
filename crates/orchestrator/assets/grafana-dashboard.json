@@ -295,9 +295,9 @@
             "uid": "Fixed-UID-testbed"
           },
           "editorMode": "code",
-          "expr": "avg(acs_leader_committed_latency) / 1000",
+          "expr": "avg(acs_leader_committed_latency{v=\"p50\"}) / 1000",
           "hide": false,
-          "legendFormat": "ACS Leader commit latency",
+          "legendFormat": "ACS Leader commit latency p50",
           "range": true,
           "refId": "I"
         },
@@ -307,11 +307,35 @@
             "uid": "Fixed-UID-testbed"
           },
           "editorMode": "code",
-          "expr": "avg(acs_duration) / 1000",
+          "expr": "avg(acs_leader_committed_latency{v=\"p90\"}) / 1000",
           "hide": false,
-          "legendFormat": "ACS duration",
+          "legendFormat": "ACS Leader commit latency p90",
           "range": true,
           "refId": "J"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "avg(acs_duration{v=\"p50\"}) / 1000",
+          "hide": false,
+          "legendFormat": "ACS duration p50",
+          "range": true,
+          "refId": "k"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "avg(acs_duration{v=\"p90\"}) / 1000",
+          "hide": false,
+          "legendFormat": "ACS duration p90",
+          "range": true,
+          "refId": "L"
         }
       ],
       "title": "Latency(ms)",
