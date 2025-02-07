@@ -688,27 +688,27 @@ impl<H: BlockHandler> Core<H> {
 
         self.acs_manager.reset(acs_output.round);
 
-        // record the data size of an acs instance
         let before_acs_size = self.acs_manager.total_size();
-        self.metrics
-            .acs_data_size_bytes
-            .with_label_values(&["shared"])
-            .observe(before_acs_size as f64);
         tracing::info!(
             "ACS view {} with reset size {} B",
             last_acs_view,
             before_acs_size
         );
+        // record the data size of an acs instance
+        self.metrics
+            .acs_data_size_bytes
+            .observe(after_acs_size - before_acs_size);
 
         self.switch_to_optimistic(last_acs_view);
         // record the acs time
         let current_time = runtime::timestamp_utc();
-        let duration = (current_time - self.last_acs_start_time).as_secs_f64();
-        self.metrics
-            .acs_duration_s
-            .with_label_values(&["shared"])
-            .observe(duration);
-        tracing::info!("ACS view {} with duration {} s", last_acs_view, duration);
+        let duration = current_time - self.last_acs_start_time;
+        self.metrics.acs_duration.observe(duration);
+        tracing::info!(
+            "ACS view {} with duration {} s",
+            last_acs_view,
+            duration.as_secs_f64()
+        );
     }
 
     fn run_block_handler(&mut self, processed: &[Data<StatementBlock>]) {
@@ -948,9 +948,8 @@ impl<H: BlockHandler> Core<H> {
             let leader_latency = current_timestamp.saturating_sub(leader_timestamp);
             if self.committer.is_acs_leader(leader.round()) {
                 self.metrics
-                    .acs_leader_latency_s
-                    .with_label_values(&["shared"])
-                    .observe(leader_latency.as_secs_f64());
+                    .acs_leader_committed_latency
+                    .observe(leader_latency);
                 tracing::info!(
                     "ACS leader {} latency: {} s",
                     leader.reference(),

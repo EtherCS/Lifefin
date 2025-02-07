@@ -42,10 +42,6 @@ pub struct Metrics {
     pub committed_leaders_total: IntCounterVec,
     pub leader_timeout_total: IntCounter,
     pub inter_block_latency_s: HistogramVec,
-    pub leader_latency_s: HistogramVec, // record the latency of committing a leader
-    pub acs_leader_latency_s: HistogramVec, // record the latency of committing acs leader
-    pub acs_data_size_bytes: HistogramVec, // record the data size of performing an acs instance
-    pub acs_duration_s: HistogramVec,   // record the duration of performing an acs instance
 
     pub block_store_unloaded_blocks: IntCounter,
     pub block_store_loaded_blocks: IntCounter,
@@ -71,7 +67,10 @@ pub struct Metrics {
     pub certificate_committed_latency: HistogramSender<Duration>,
     pub transaction_committed_latency: HistogramSender<Duration>,
     pub leader_committed_latency: HistogramSender<Duration>,
+    pub acs_leader_committed_latency: HistogramSender<Duration>,
+    pub acs_duration: HistogramSender<Duration>,
 
+    pub acs_data_size_bytes: HistogramSender<usize>,
     pub proposed_block_size_bytes: HistogramSender<usize>,
     pub proposed_block_transaction_count: HistogramSender<usize>,
     pub proposed_block_vote_count: HistogramSender<usize>,
@@ -89,7 +88,10 @@ pub struct MetricReporter {
     pub certificate_committed_latency: HistogramReporter<Duration>,
     pub transaction_committed_latency: HistogramReporter<Duration>,
     pub leader_committed_latency: HistogramReporter<Duration>,
+    pub acs_leader_committed_latency: HistogramReporter<Duration>,
+    pub acs_duration: HistogramReporter<Duration>,
 
+    pub acs_data_size_bytes: HistogramReporter<usize>,
     pub proposed_block_size_bytes: HistogramReporter<usize>,
     pub proposed_block_transaction_count: HistogramReporter<usize>,
     pub proposed_block_vote_count: HistogramReporter<usize>,
@@ -116,7 +118,10 @@ impl Metrics {
         let (certificate_committed_latency_hist, certificate_committed_latency) = histogram();
         let (transaction_committed_latency_hist, transaction_committed_latency) = histogram();
         let (leader_committed_latency_hist, leader_committed_latency) = histogram();
+        let (acs_leader_committed_latency_hist, acs_leader_committed_latency) = histogram();
+        let (acs_duration_hist, acs_duration) = histogram();
 
+        let (acs_data_size_bytes_hist, acs_data_size_bytes) = histogram();
         let (proposed_block_size_bytes_hist, proposed_block_size_bytes) = histogram();
         let (proposed_block_transaction_count_hist, proposed_block_transaction_count) = histogram();
         let (proposed_block_vote_count_hist, proposed_block_vote_count) = histogram();
@@ -155,7 +160,22 @@ impl Metrics {
                 registry,
                 "leader_committed_latency",
             ),
+            acs_leader_committed_latency: HistogramReporter::new_in_registry(
+                acs_leader_committed_latency_hist,
+                registry,
+                "acs_leader_committed_latency",
+            ),
+            acs_duration: HistogramReporter::new_in_registry(
+                acs_duration_hist,
+                registry,
+                "acs_duration",
+            ),
 
+            acs_data_size_bytes: HistogramReporter::new_in_registry(
+                acs_data_size_bytes_hist,
+                registry,
+                "acs_data_size_bytes",
+            ),
             proposed_block_size_bytes: HistogramReporter::new_in_registry(
                 proposed_block_size_bytes_hist,
                 registry,
@@ -224,34 +244,6 @@ impl Metrics {
             inter_block_latency_s: register_histogram_vec_with_registry!(
                 "inter_block_latency_s",
                 "Buckets measuring the inter-block latency in seconds",
-                &["workload"],
-                LATENCY_SEC_BUCKETS.to_vec(),
-                registry,
-            ).unwrap(),
-            leader_latency_s: register_histogram_vec_with_registry!(
-                "leader_latency_s",
-                "Buckets measuring the latency of committing leader in seconds",
-                &["workload"],
-                LATENCY_SEC_BUCKETS.to_vec(),
-                registry,
-            ).unwrap(),
-            acs_leader_latency_s: register_histogram_vec_with_registry!(
-                "acs_leader_latency_s",
-                "Buckets measuring the latency of committing acs leader in seconds",
-                &["workload"],
-                LATENCY_SEC_BUCKETS.to_vec(),
-                registry,
-            ).unwrap(),
-            acs_data_size_bytes: register_histogram_vec_with_registry!(
-                "acs_data_size_bytes",
-                "Buckets measuring the data size of performing an acs instance",
-                &["workload"],
-                LATENCY_SEC_BUCKETS.to_vec(),
-                registry,
-            ).unwrap(),
-            acs_duration_s: register_histogram_vec_with_registry!(
-                "acs_duration_s",
-                "Buckets measuring the duration of performing an acs instance",
                 &["workload"],
                 LATENCY_SEC_BUCKETS.to_vec(),
                 registry,
@@ -374,7 +366,10 @@ impl Metrics {
             certificate_committed_latency,
             transaction_committed_latency,
             leader_committed_latency,
+            acs_leader_committed_latency,
+            acs_duration,
 
+            acs_data_size_bytes,
             proposed_block_size_bytes,
             proposed_block_transaction_count,
             proposed_block_vote_count,
@@ -491,7 +486,10 @@ impl MetricReporter {
         self.certificate_committed_latency.clear_receive_all();
         self.transaction_committed_latency.clear_receive_all();
         self.leader_committed_latency.clear_receive_all();
+        self.acs_leader_committed_latency.clear_receive_all();
+        self.acs_duration.clear_receive_all();
 
+        self.acs_data_size_bytes.clear_receive_all();
         self.proposed_block_size_bytes.clear_receive_all();
         self.proposed_block_transaction_count.clear_receive_all();
         self.proposed_block_vote_count.clear_receive_all();
@@ -522,7 +520,10 @@ impl MetricReporter {
         self.certificate_committed_latency.report();
         self.transaction_committed_latency.report();
         self.leader_committed_latency.report();
+        self.acs_leader_committed_latency.report();
+        self.acs_duration.report();
 
+        self.acs_data_size_bytes.report();
         self.proposed_block_size_bytes.report();
         self.proposed_block_transaction_count.report();
         self.proposed_block_vote_count.report();

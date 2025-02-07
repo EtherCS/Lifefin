@@ -271,11 +271,47 @@
             "uid": "Fixed-UID-testbed"
           },
           "editorMode": "code",
-          "expr": "avg(leader_committed_latency) / 1000",
+          "expr": "avg(leader_committed_latency{v=\"p50\"}) / 1000",
           "hide": false,
-          "legendFormat": "Leader commit latency",
+          "legendFormat": "Leader commit latency p50",
           "range": true,
           "refId": "G"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "avg(leader_committed_latency{v=\"p90\"}) / 1000",
+          "hide": false,
+          "legendFormat": "Leader commit latency p90",
+          "range": true,
+          "refId": "H"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "avg(acs_leader_committed_latency) / 1000",
+          "hide": false,
+          "legendFormat": "ACS Leader commit latency",
+          "range": true,
+          "refId": "I"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "avg(acs_duration) / 1000",
+          "hide": false,
+          "legendFormat": "ACS duration",
+          "range": true,
+          "refId": "J"
         }
       ],
       "title": "Latency(ms)",
@@ -575,6 +611,100 @@
         }
       ],
       "title": "Avg connection latency (by peer)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Fixed-UID-testbed"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Fixed-UID-testbed"
+          },
+          "editorMode": "code",
+          "expr": "acs_data_size_bytes{v=\"p50\"} / 1024",
+          "instant": false,
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "ACS data size p50(Kbytes)",
       "type": "timeseries"
     },
     {
