@@ -490,6 +490,7 @@ impl MetricReporter {
         self.transaction_certified_latency.clear_receive_all();
         self.certificate_committed_latency.clear_receive_all();
         self.transaction_committed_latency.clear_receive_all();
+        self.leader_committed_latency.clear_receive_all();
 
         self.proposed_block_size_bytes.clear_receive_all();
         self.proposed_block_transaction_count.clear_receive_all();
@@ -520,6 +521,7 @@ impl MetricReporter {
         self.transaction_certified_latency.report();
         self.certificate_committed_latency.report();
         self.transaction_committed_latency.report();
+        self.leader_committed_latency.report();
 
         self.proposed_block_size_bytes.report();
         self.proposed_block_transaction_count.report();
