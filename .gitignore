@@ -29,6 +29,9 @@ wal
 # benchmark setting
 settings.yml
 
+# benchmark result
+*/results-dev-ACS-mysticeti
+
 dagACS.code-workspace
 
 # don't check
