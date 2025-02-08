@@ -94,14 +94,14 @@ def install(ctx):
 
 
 @task
-def remote(ctx, burst = 50, debug=False):
+def remote(ctx, burst = 10, debug=False):
     ''' Run benchmarks on AWS EC2 '''
     bench_params = {
         'faults': 0,
         'nodes': 4,
         'workers': 1,
         # 'collocate': True,
-        'rate': [500],
+        'rate': [8000],
         'tx_size': 512,
         'duration': 120,
         'runs': 1,
@@ -109,8 +109,8 @@ def remote(ctx, burst = 50, debug=False):
     }
 
     nodes = bench_params['nodes']
-    rate =  1000 * nodes
-    bench_params['rate'] = [rate]
+    # rate =  1000 * nodes
+    # bench_params['rate'] = [rate]
 
     node_params = {
         'header_size': 50,  # bytes
