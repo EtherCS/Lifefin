@@ -23,6 +23,7 @@ cobertura.xml
 
 # logs
 *.log.ansi
+*.log
 # *.txt
 wal
 
