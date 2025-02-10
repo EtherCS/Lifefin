@@ -235,9 +235,9 @@
             "uid": "Fixed-UID-testbed"
           },
           "editorMode": "code",
-          "expr": "avg(transaction_committed_latency{v=\"p90\"}) / 1000",
+          "expr": "avg(transaction_committed_latency{v=\"p99\"}) / 1000",
           "hide": false,
-          "legendFormat": "Tx Commit p90",
+          "legendFormat": "Tx Commit p99",
           "range": true,
           "refId": "D"
         },
