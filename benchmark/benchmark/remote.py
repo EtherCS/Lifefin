@@ -265,6 +265,9 @@ class Bench:
                 log_file = PathMaker.worker_log_file(i, id)
                 self._background_run(host, cmd, log_file)
 
+        # Wait for all nodes to synchronize
+        sleep(10)
+        
         # Wait for all transactions to be processed.
         duration = bench_parameters.duration
         for _ in progress_bar(range(20), prefix=f"Running benchmark ({duration} sec):"):
