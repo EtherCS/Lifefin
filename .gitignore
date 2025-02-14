@@ -37,3 +37,6 @@ Cargo.lock
 benchmark_client
 node
 benchmark/*
+
+# benchmark
+results/*

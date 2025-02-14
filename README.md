@@ -21,6 +21,6 @@ This software is licensed as [Apache 2.0](LICENSE).
 ## Sailfish ACS protocol
 [Paper] *Sailfish: Towards Improving the Latency of DAG-based BFT* [[link](https://eprint.iacr.org/2024/472)]
 
-*Attack evaluation:* see [here](https://github.com/EtherCS/sailfish)
+*Attack evaluation:* see [here](https://github.com/EtherCS/dagACS/tree/inflation-sailfish)
 
 *Implementation:* see this [branch](https://github.com/EtherCS/dagACS/tree/dev-ACS-sailfish-v2)
