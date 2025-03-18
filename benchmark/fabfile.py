@@ -19,12 +19,12 @@ def local(ctx, debug=True):
         'workers': 1,
         'rate': 5_000,
         'tx_size': 512,
-        'duration': 60,
+        'duration': 30,
         "burst": 10
     }
     node_params = {
         'header_size': 1_000,  # bytes
-        'max_header_delay': 1_000,  # ms
+        'max_header_delay': 0,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
@@ -32,7 +32,7 @@ def local(ctx, debug=True):
         'max_batch_delay': 200,  # ms
         'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
         'fallback_round': 10,  # rounds
-        'node_types': [0]*10  # 0: honest, 1: crash, 2: attack
+        'node_types': [0]*10 + [2]*0 + [1]*0  # 0: honest, 1: crash, 2: attack
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -189,6 +189,8 @@ def inflation(ctx, debug=True):
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 50_000,  # bytes
         'max_batch_delay': 200,  # ms
+        'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
+        'fallback_round': 0,  # rounds
         'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
     }
     try:
