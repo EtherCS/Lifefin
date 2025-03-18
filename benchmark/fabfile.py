@@ -166,7 +166,7 @@ def logs(ctx):
 def inflation(ctx, debug=True):
     ''' Run benchmarks on localhost '''
     f = 3 # number of malicious nodes
-    crash_time = 30
+    crash_time = 30 # time (s) to crash an honest node
 
     bench_params = {
         'faults': 0,
