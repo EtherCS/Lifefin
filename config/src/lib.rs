@@ -202,6 +202,14 @@ impl Committee {
         2 * total_votes / 3 + 1
     }
 
+    /// Returns the stake required to reach f + 2 (for Attackers).
+    pub fn attackers_threshold(&self) -> Stake {
+        // If N = 3f + 1 + k (0 <= k < 3)
+        // then (N + 5) / 3 = ((N + 2) / 3) + 1 = f + 2 + k/3 = f + 2
+        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        (total_votes + 5) / 3
+    }
+
     /// Returns the stake required to reach availability (f+1).
     pub fn validity_threshold(&self) -> Stake {
         // If N = 3f + 1 + k (0 <= k < 3)
@@ -298,6 +306,12 @@ impl Committee {
             })
             .collect()
     }
+}
+
+#[derive(Clone)]
+pub enum NodeType {
+    Honest,
+    Attacker,
 }
 
 #[derive(Serialize, Deserialize)]

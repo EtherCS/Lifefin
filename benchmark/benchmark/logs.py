@@ -34,8 +34,9 @@ class LogParser:
             with Pool() as p:
                 results = p.map(self._parse_clients, clients)
         except (ValueError, IndexError, AttributeError) as e:
-            raise ParseError(f"Failed to parse clients' logs: {e}")
-        self.size, self.rate, self.start, misses, self.sent_samples = zip(*results)
+            raise ParseError(f'Failed to parse clients\' logs: {e}')
+        self.size, self.rate, self.start, misses, self.sent_samples \
+            = zip(*results)
         self.misses = sum(misses)
 
         # Parse the primaries logs.
@@ -88,16 +89,23 @@ class LogParser:
             with Pool() as p:
                 results = p.map(self._parse_workers, workers)
         except (ValueError, IndexError, AttributeError) as e:
-            raise ParseError(f"Failed to parse workers' logs: {e}")
+            raise ParseError(f'Failed to parse workers\' logs: {e}')
         sizes, self.received_samples, workers_ips = zip(*results)
-        self.sizes = {k: v for x in sizes for k, v in x.items() if k in self.commits}
+        self.sizes = {
+            k: v for x in sizes for k, v in x.items() if k in self.commits
+        }
+        self.total_sizes = {
+            k: v for x in sizes for k, v in x.items() if k in self.proposals
+        }
 
         # Determine whether the primary and the workers are collocated.
         self.collocate = set(primary_ips) == set(workers_ips)
 
         # Check whether clients missed their target rate.
         if self.misses != 0:
-            Print.warn(f"Clients missed their target rate {self.misses:,} time(s)")
+            Print.warn(
+                f'Clients missed their target rate {self.misses:,} time(s)'
+            )
 
     def _merge_results(self, input):
         # Keep the earliest timestamp.

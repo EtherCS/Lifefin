@@ -13,6 +13,76 @@ use crypto::{PublicKey, Signature};
 use std::collections::HashSet;
 use std::{fmt, mem};
 
+/// Aggregates a state for the votes of a header (fixed sailfish committing issue)
+pub struct HeaderStakeAggregator {
+    weight: Stake,
+    votes: Vec<Header>,
+    used: HashSet<PublicKey>,
+}
+
+impl HeaderStakeAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(&mut self, header: Header, committee: &Committee) {
+        let author = header.author;
+
+        // Ensure it is the first time this authority votes.
+        if self.used.insert(author) {
+            self.votes.push(header);
+            self.weight += committee.stake(&author);
+        }
+    }
+
+    pub fn aggregated_stake(&self) -> Stake {
+        self.weight
+    }
+}
+
+/// Aggregates a Certificate for a particular attacker node.
+pub struct AttackerCertificateAggregator {
+    weight: Stake,
+    certificates: Vec<Certificate>,
+    used: HashSet<PublicKey>,
+}
+
+impl AttackerCertificateAggregator {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            certificates: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        certificate: Certificate,
+        committee: &Committee,
+    ) -> DagResult<Option<Vec<Certificate>>> {
+        let author = certificate.origin();
+
+        // Ensure it is the first time this authority sends a certificate.
+        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+
+        self.certificates.push(certificate);
+        self.weight += committee.stake(&author);
+
+        if self.weight >= committee.attackers_threshold() {
+            self.weight = 0;
+            self.used.clear();
+            // Once quorum is reached, you might reset for the next round or use the certification as needed.
+            return Ok(Some(self.certificates.drain(..).collect()));
+        }
+        Ok(None)
+    }
+}
+
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
     weight: Stake,

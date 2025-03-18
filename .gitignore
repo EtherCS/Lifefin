@@ -24,8 +24,23 @@ cobertura.xml
 # logs
 *.log.ansi
 *.log
-# *.txt
+*.txt
 wal
+
+# sailfish
+benchmark/data/*
+benchmark/*.json
+benchmark/benchmark_client
+benchmark/node
+*.json
+.DS_Store
+.storage_*
+.*storage*
+.db_test*
+.venv/
+.idea/*
+rust/.idea/*
+.db-*
 
 # don't check
 .pre-commit-config.yaml

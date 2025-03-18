@@ -20,5 +20,6 @@ mod synchronizer;
 // mod common;
 
 pub use crate::acs_types::ACSOutput;
+pub use crate::aggregators::{AttackerCertificateAggregator, HeaderStakeAggregator};
 pub use crate::messages::{Certificate, Header};
 pub use crate::primary::{Primary, PrimaryWorkerMessage, Round, WorkerPrimaryMessage};

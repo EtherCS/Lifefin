@@ -17,7 +17,7 @@ use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
 use bytes::Bytes;
-use config::{Committee, KeyPair, Parameters, WorkerId};
+use config::{Committee, KeyPair, Parameters, NodeType, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::sink::SinkExt as _;
 use log::info;
@@ -88,6 +88,7 @@ impl Primary {
         tx_consensus_header: Sender<Header>,
         tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
         rx_fallback: Receiver<u64>,
+        type_: u8,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -106,6 +107,7 @@ impl Primary {
 
         let (tx_post_proposer, rx_post_proposer) = channel(CHANNEL_CAPACITY);
 
+        let (tx_certificates_attacker, rx_certificates_attacker) = channel(CHANNEL_CAPACITY);
         // Write the parameters to the logs.
         parameters.log();
 
@@ -169,6 +171,12 @@ impl Primary {
 
         let fallback_round = parameters.fallback_round as Round;
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
+        let node_type = match type_ {
+            0 => NodeType::Honest,
+            2 => NodeType::Attacker,
+            _ => panic!("Invalid node type"),
+        };
+
         Core::spawn(
             name,
             committee.clone(),
@@ -185,6 +193,7 @@ impl Primary {
             rx_no_vote_msg,
             tx_consensus,
             /* tx_proposer */ tx_parents,
+            tx_certificates_attacker,
             tx_timeout_cert,
             tx_no_vote_cert,
             tx_consensus_header,
@@ -192,6 +201,7 @@ impl Primary {
             tx_post_proposer,
             tx_acs_consensus,
             rx_fallback,
+            node_type.clone(),
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -239,6 +249,8 @@ impl Primary {
             tx_no_vote_msg,
             rx_no_vote_cert,
             rx_post_proposer,
+            /* rx_core_certificates*/rx_certificates_attacker,
+            node_type.clone(),
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.

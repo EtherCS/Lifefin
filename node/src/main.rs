@@ -10,6 +10,7 @@ use primary::{Certificate, Primary};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
 use worker::Worker;
+use log::info;
 
 /// The default channel capacity.
 pub const CHANNEL_CAPACITY: usize = 1_000;
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
                 .args_from_usage("--committee=<FILE> 'The file containing committee information'")
                 .args_from_usage("--parameters=[FILE] 'The file containing the node parameters'")
                 .args_from_usage("--store=<PATH> 'The path where to create the data store'")
+                .args_from_usage("--type=<INT> 'The type of the node to run'")
                 .subcommand(SubCommand::with_name("primary").about("Run a single primary"))
                 .subcommand(
                     SubCommand::with_name("worker")
@@ -71,7 +73,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     let committee_file = matches.value_of("committee").unwrap();
     let parameters_file = matches.value_of("parameters");
     let store_path = matches.value_of("store").unwrap();
-    // let fallback_round = matches.value_of("fallback_round").unwrap().parse::<u64>().unwrap();
+    let node_type = matches.value_of("type").unwrap(); // Honest: 0, crash: 1 or Byzantine: 2
 
     // Read the committee and node's keypair from file.
     let keypair = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
@@ -91,6 +93,8 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
 
     // Channels the sequence of certificates.
     let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
+
+    info!("Running a node of type {}", node_type);
 
     // Check whether to run a primary, a worker, or an entire authority.
     match matches.subcommand() {
@@ -115,6 +119,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 tx_consensus_header,
                 tx_acs_consensus,
                 rx_fallback,
+                node_type.parse::<u8>().unwrap(),
             );
             Consensus::spawn(
                 committee,

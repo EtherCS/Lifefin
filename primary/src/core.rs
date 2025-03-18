@@ -5,7 +5,7 @@ use crate::acs_types::{
     FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
 };
 use crate::aggregators::{
-    CertificatesAggregator, CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator,
+    AttackerCertificateAggregator, CertificatesAggregator, CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator,
     NoVoteAggregator, PisaAuxAggregator, PisaBvalAggregator, PisaDesicionAggregator,
     TimeoutAggregator, VotesAggregator,
 };
@@ -18,7 +18,7 @@ use crate::primary::{PrimaryMessage, Round};
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use config::{Committee, ConsensusMode};
+use config::{Committee, ConsensusMode, NodeType};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
@@ -64,6 +64,8 @@ pub struct Core {
     tx_consensus: Sender<Certificate>,
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<(Vec<Certificate>, Round)>,
+    /// Send f + 2 certificates to the Proposer.
+    tx_proposer_certificates: Sender<(Vec<Certificate>, Round)>,
     /// Send a valid TimeoutCertificate along with the round to the `Proposer`.
     tx_timeout_cert: Sender<(TimeoutCert, Round)>,
     /// Send a valid NoVoteCert along with the round to the `Proposer`.
@@ -78,6 +80,8 @@ pub struct Core {
     processing: HashMap<Round, HashSet<Digest>>,
     /// The last header we proposed (for which we are waiting votes).
     current_header: Header,
+    /// Aggregates certificates to use for attacker node to propose new header.
+    attacker_certificate_aggregators: HashMap<Round, Box<AttackerCertificateAggregator>>,
     /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
     /// Aggregates certificates to use as parents for new headers.
@@ -114,6 +118,8 @@ pub struct Core {
     tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
     /// Receive fallback messages from consensus module, long time not committed
     rx_fallback: Receiver<u64>,
+    /// Weather this node is an attacker or not.
+    node_type: NodeType, //*
 }
 
 impl Core {
@@ -134,6 +140,7 @@ impl Core {
         rx_no_vote_msg: Receiver<NoVoteMsg>,
         tx_consensus: Sender<Certificate>,
         tx_proposer: Sender<(Vec<Certificate>, Round)>,
+        tx_proposer_certificates: Sender<(Vec<Certificate>, Round)>,
         tx_timeout_cert: Sender<(TimeoutCert, Round)>,
         tx_no_vote_cert: Sender<(NoVoteCert, Round)>,
         tx_consensus_header: Sender<Header>,
@@ -141,6 +148,7 @@ impl Core {
         tx_post_proposer: Sender<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
         tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
         rx_fallback: Receiver<u64>,
+        node_type: NodeType,
     ) {
         tokio::spawn(async move {
             Self {
@@ -149,6 +157,7 @@ impl Core {
                 store,
                 synchronizer,
                 signature_service: signature_service.clone(),
+                consensus_round,
                 gc_depth,
                 rx_primaries,
                 rx_header_waiter,
@@ -158,6 +167,7 @@ impl Core {
                 rx_no_vote_msg,
                 tx_consensus,
                 tx_proposer,
+                tx_proposer_certificates,
                 tx_timeout_cert,
                 tx_no_vote_cert,
                 tx_consensus_header,
@@ -166,6 +176,7 @@ impl Core {
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 current_header: Header::default(),
+                attacker_certificate_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 votes_aggregator: VotesAggregator::new(),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
@@ -179,10 +190,10 @@ impl Core {
                 pisa_aux_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 pisa_descion_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 last_seen_headers: HashMap::new(),
-                consensus_round,
                 tx_post_proposer,
                 tx_acs_consensus,
                 rx_fallback,
+                node_type,
             }
             .run()
             .await;
@@ -513,6 +524,33 @@ impl Core {
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
+
+        
+        // Ensuring attacker node does not link with the leader node of the previous round.
+        match self.node_type {
+            NodeType::Honest => (),
+            NodeType::Attacker => {
+                if let Some(certificates) = self
+                    .attacker_certificate_aggregators
+                    .entry(certificate.round())
+                    .or_insert_with(|| Box::new(AttackerCertificateAggregator::new()))
+                    .append(certificate.clone(), &self.committee)?
+                {
+                    // Send it to the `Proposer`.
+                    self.tx_proposer_certificates
+                        .send((certificates, certificate.round()))
+                        .await
+                        .expect("Failed to send certificates");
+                }
+
+                let leader = self.committee.leader(certificate.round() as usize);
+                if leader.eq(&certificate.origin()) {
+                    info!("Attacker is not adding the certificate of the leader node of round {}", certificate.round());
+                    return Ok(());
+                }
+
+            }
+        }
 
         // Check if we have enough certificates to enter a new dag round and propose a header.
         if let Some(parents) = self
@@ -2183,7 +2221,21 @@ impl Core {
                 Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
 
                 // We also receive here our new headers created by the `Proposer`.
-                Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
+                Some(header) = self.rx_proposer.recv() =>{
+                    // Process the header based on the node type. If the leader is an attacker it will not send the header.
+                    match self.node_type {
+                        NodeType::Honest => self.process_own_header(header).await,
+                        NodeType::Attacker => {
+                            let leader = self.committee.leader(header.round as usize);
+                            if leader.eq(&self.name) {
+                                // The attacker leader node does not send the header.
+                                continue;
+                            }
+                            self.process_own_header(header).await
+                        },
+                    }
+                },
+                 
                 // We also receive here our timeout created by the `Proposer`.
                 Some(timeout) = self.rx_timeout.recv() => self.process_own_timeout(timeout).await,
                 // We also receive here our no vote messages created by the `Proposer`.
@@ -2215,6 +2267,7 @@ impl Core {
                 self.last_voted.retain(|k, _| k >= &gc_round);
                 self.processing.retain(|k, _| k >= &gc_round);
                 self.certificates_aggregators.retain(|k, _| k >= &gc_round);
+                self.attacker_certificate_aggregators.retain(|k, _| k >= &gc_round);
                 self.cancel_handlers.retain(|k, _| k >= &gc_round);
                 self.gc_round = gc_round;
             }

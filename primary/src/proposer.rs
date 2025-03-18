@@ -2,7 +2,7 @@ use crate::acs_types::MetaPoSTBlockData;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::messages::{Certificate, Header, NoVoteCert, NoVoteMsg, Timeout, TimeoutCert};
 use crate::primary::Round;
-use config::{Committee, WorkerId};
+use config::{Committee, NodeType, WorkerId};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 #[cfg(feature = "benchmark")]
@@ -11,6 +11,7 @@ use log::{debug, warn};
 use std::cmp::Ordering;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
+use std::collections::HashMap;
 
 // #[cfg(test)]
 // #[path = "tests/proposer_tests.rs"]
@@ -43,6 +44,8 @@ pub struct Proposer {
     tx_core_no_vote_msg: Sender<NoVoteMsg>,
     /// Receives no vote certs from the `Core`.
     rx_no_vote_cert: Receiver<(NoVoteCert, Round)>,
+    /// Receives the f + 2 headers from the `Core`.
+    rx_core_certificates: Receiver<(Vec<Certificate>, Round)>,
 
     /// The current round of the dag.
     round: Round,
@@ -61,6 +64,16 @@ pub struct Proposer {
 
     /// Receives the meta post blocks and their proposers.
     rx_post_proposer: Receiver<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
+    /// Holds the last certificates that he needs for the current round.
+    last_certificates: (Vec<Certificate>, Round),
+    /// Saves the timeout_certs that it receives.
+    last_timeout_certs: Vec<TimeoutCert>,
+    /// Saves all the parents that it receives.
+    parents: HashMap<Round, Vec<Certificate>>,
+    /// Saves all the certificates that it receives.
+    certificates: HashMap<Round, Vec<Certificate>>,
+    /// Type of the node is running this proposer.
+    node_type: NodeType,
 }
 
 impl Proposer {
@@ -79,6 +92,8 @@ impl Proposer {
         tx_core_no_vote_msg: Sender<NoVoteMsg>,
         rx_no_vote_cert: Receiver<(NoVoteCert, Round)>,
         rx_post_proposer: Receiver<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
+        rx_core_certificates: Receiver<(Vec<Certificate>, Round)>,
+        node_type: NodeType,
     ) {
         let genesis = Certificate::genesis(&committee);
         tokio::spawn(async move {
@@ -95,14 +110,20 @@ impl Proposer {
                 rx_timeout_cert,
                 tx_core_no_vote_msg,
                 rx_no_vote_cert,
+                rx_core_certificates,
                 round: 0,
                 last_parents: genesis,
                 last_leader: None,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
-                last_timeout_cert: TimeoutCert::new(0),
-                last_no_vote_cert: NoVoteCert::new(0),
+                last_timeout_cert: TimeoutCert:: new(0),
+                last_no_vote_cert: NoVoteCert:: new(0),
                 rx_post_proposer,
+                last_certificates: (Vec::new(), 0),
+                last_timeout_certs: Vec::new(),
+                parents: HashMap::new(),
+                certificates: HashMap::new(),
+                node_type,
             }
             .run()
             .await;
@@ -218,6 +239,69 @@ impl Proposer {
 
         self.last_leader.is_some()
     }
+    
+    // Check that the leader is not in the parents of an attacker node.
+    fn check_leader(&mut self) -> bool {
+        let leader_name = self.committee.leader(self.round as usize);
+        let leader: Option<Certificate> = self
+            .last_parents
+            .iter()
+            .find(|x| x.origin() == leader_name)
+            .cloned();
+        
+        leader.is_some()
+    }
+
+    fn add_or_extend_parents(&mut self, parents: Vec<Certificate>, round: Round) {
+        self.parents
+            .entry(round)
+            .or_insert_with(Vec::new)
+            .extend(parents);
+    }
+
+    fn update_parents(&mut self) {
+        if let Some(parents) = self.parents.remove(&self.round) {
+            self.last_parents = parents;
+        }
+    }
+
+    fn add_certificates(&mut self, certificates_: Vec<Certificate>, round: Round) {
+        self.certificates
+            .entry(round)
+            .or_insert_with(Vec::new)
+            .extend(certificates_);
+    }
+
+    fn update_certificates(&mut self) {
+        if let Some(certificates_) = self.certificates.remove(&(self.round + 1)) {
+            self.last_certificates.0 = certificates_;
+            self.last_certificates.1 = self.round + 1;
+        }
+    }
+
+    fn add_timeout_cert(&mut self, timeout_cert: TimeoutCert) -> TimeoutCert {
+        if let Some(pos) = self.last_timeout_certs.iter().position(|x| x.round == timeout_cert.round) {
+            self.last_timeout_certs[pos] = timeout_cert.clone();
+        } else {
+            self.last_timeout_certs.push(timeout_cert.clone());
+            
+        }
+
+        if self.round >= timeout_cert.round {
+            timeout_cert
+        } else {
+            self.last_timeout_certs.iter().find(|x| x.round == self.round).cloned().unwrap_or_else(|| TimeoutCert::new(0))
+        }
+    }
+
+    fn update_timeout_certs(&mut self) {
+        if let Some(pos) = self.last_timeout_certs.iter().position(|x| x.round == self.round - 1) {
+            self.last_timeout_certs.remove(pos);
+        }
+        if let Some(timeout_cert) = self.last_timeout_certs.iter().find(|x| x.round == self.round) {
+            self.last_timeout_cert = timeout_cert.clone();
+        }
+    }
 
     /// Main loop listening to incoming messages.
     pub async fn run(&mut self) {
@@ -226,6 +310,7 @@ impl Proposer {
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         let mut timeout_sent = false;
+        let mut no_vote_sent = false;
         tokio::pin!(timer);
 
         loop {
@@ -240,36 +325,45 @@ impl Proposer {
             let no_vote_cert_gathered = self.last_no_vote_cert.round == self.round;
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
+            let has_certificates = match self.node_type {
+                NodeType::Honest => true,
+                NodeType::Attacker => {
+                    self.last_certificates.1 == self.round + 1
+                }
+            };
 
             // TODO: This has to be fixed by sending timeout only once.
-            if timer_expired && !timeout_sent {
+            if timer_expired && !timeout_sent  {
                 warn!("Timer expired for round {}", self.round);
                 self.make_timeout_msg().await;
                 timeout_sent = true;
             }
 
-            if ((timer_expired
-                && timeout_cert_gathered
-                && (!is_next_leader || no_vote_cert_gathered))
-                || (enough_digests && advance))
-                && enough_parents
-            {
-                if timer_expired && self.last_leader.is_none() && !is_next_leader {
+            if ((timer_expired && timeout_cert_gathered && (!is_next_leader || no_vote_cert_gathered)) || (enough_digests && advance)) && enough_parents {
+                
+                if timer_expired && self.last_leader.is_none() && !is_next_leader && !no_vote_sent {
                     self.make_no_vote_msg().await;
+                    no_vote_sent = true;
                 }
 
-                // Advance to the next round.
-                self.round += 1;
-                debug!("Dag moved to round {}", self.round);
+                if has_certificates {
+                    // Advance to the next round.
+                    self.round += 1;
+                    debug!("Dag moved to round {}", self.round);
 
-                // Make a new header.
-                self.make_header().await;
-                self.payload_size = 0;
+                    // Make a new header.
+                    self.make_header().await;
+                    self.update_parents();
+                    self.update_certificates();
+                    self.update_timeout_certs();
+                    self.payload_size = 0;
 
-                // Reschedule the timer.
-                let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
-                timer.as_mut().reset(deadline);
-                timeout_sent = false;
+                    // Reschedule the timer.
+                    let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
+                    timer.as_mut().reset(deadline);
+                    timeout_sent = false;
+                    no_vote_sent = false;
+                }   
             }
 
             tokio::select! {
@@ -290,42 +384,82 @@ impl Proposer {
                     }
                 }
                 Some((parents, round)) = self.rx_core.recv() => {
-                    // info!("Received parents of round {} and we are in round {}", round, self.round);
                     // Compare the parents' round number with our current round.
                     match round.cmp(&self.round) {
                         Ordering::Greater => {
                             // We accept round bigger than our current round to jump ahead in case we were
                             // late (or just joined the network).
-                            self.round = round;
-                            self.last_parents = parents;
+                            
+                            match self.node_type {
+                                NodeType::Honest => {
+                                    self.round = round;
+                                    self.last_parents = parents;
+                                    debug!("Dag jumped to round {}", self.round);
+                                },
+                                NodeType::Attacker => {
+                                    // Attacker node should not jump ahead.
+                                    self.add_or_extend_parents(parents, round);
+                                }
+                            }
                         },
                         Ordering::Less => {
                             // Ignore parents from older rounds.
+                            continue;
                         },
                         Ordering::Equal => {
                             // The core gives us the parents the first time they are enough to form a quorum.
                             // Then it keeps giving us all the extra parents.
                             self.last_parents.extend(parents)
-                        }
+                        },
                     }
 
                     // Check whether we can advance to the next round. Note that if we timeout,
                     // we ignore this check and advance anyway.
                     // TODO: (1) Implement the wait for NVC if leader logic here
                     // (2) Also implement the wait for leader idea what is was there before
-                    advance = self.update_leader();
+
+                    advance = match self.node_type {
+                        NodeType::Honest => self.update_leader(),
+                        NodeType::Attacker => {
+                            if self.check_leader() {
+                                debug!("Leader is in the parents of an attacker node");
+                                false
+                            } else {
+                                true && timeout_cert_gathered
+                            }
+                        },
+                    };
+                }
+                Some((_certificates, round)) = self.rx_core_certificates.recv() => {
+                    match round.cmp(&self.round) {
+                        Ordering::Greater => {
+                            // We accept round bigger than our current round
+                            if self.round + 1 == round {
+                                self.last_certificates = (_certificates, round);
+                            } else {
+                                self.add_certificates(_certificates, round);
+                            }
+                        },
+                        Ordering::Less => {
+                            // Ignore parents from older rounds.
+                            continue;
+                        },
+                        Ordering::Equal => {
+                            // Ignore parents from the current round.
+                            continue;
+                        },
+                    }   
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     self.payload_size += digest.size();
                     self.digests.push((digest, worker_id));
                 }
                 Some((timeout_cert, round)) = self.rx_timeout_cert.recv() => {
-                    // info!("Received timeout certificate of round {} and we are in round {}", round, self.round);
                     match round.cmp(&self.last_timeout_cert.round) {
                         Ordering::Greater => {
                             // We accept round bigger than our current round to jump ahead in case we were
                             // late (or just joined the network).
-                            self.last_timeout_cert = timeout_cert.clone();
+                            self.last_timeout_cert = self.add_timeout_cert(timeout_cert.clone());
 
                             // TODO: How do we react?
                         },
@@ -334,7 +468,7 @@ impl Proposer {
                         },
                         Ordering::Equal => {
                             // TODO: Here we have to create header and include the timeout certificate in the header?
-                            self.last_timeout_cert = timeout_cert.clone();
+                            self.last_timeout_cert = self.add_timeout_cert(timeout_cert.clone());
                         }
                     }
                 }

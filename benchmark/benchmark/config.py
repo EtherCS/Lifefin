@@ -45,7 +45,7 @@ class Committee:
     def __init__(self, json):
         self.json = json
 
-    def address_list_to_json(addresses, base_port, faults):
+    def address_list_to_json(addresses, base_port, node_types, faults):
         ''' The `addresses` field looks as follows:
             {
                 "name": ["host", "host", ...],
@@ -89,14 +89,15 @@ class Committee:
                     'worker_to_worker': f'{host}:{port + 2}',
                 }
                 port += 3
-
             json['authorities'][name] = {
                 # Corresponds to the determination of faulty nodes in primary_addresses.
-                'is_honest': i < num_authorities - faults,
+                # 'is_honest': i < num_authorities - faults,
+                'is_honest': node_types[i] == 0,
                 'stake': 1,
                 'consensus': consensus_addr,
                 'primary': primary_addr,
-                'workers': workers_addr
+                'workers': workers_addr,
+                'type': node_types[i]
             }
         return json
 
@@ -168,12 +169,12 @@ class Committee:
     def ip(address):
         assert isinstance(address, str)
         return address.split(':')[0]
-
+    
     def faults(self):
         '''Returns the total number of Byzantine authorities.'''
         num_honest = sum([1 for a in self.json['authorities'].values() if a['is_honest']])
         return self.size() - num_honest
-
+    
     def print(self, filename):
         assert isinstance(filename, str)
         with open(filename, 'w') as f:
@@ -181,13 +182,13 @@ class Committee:
 
 
 class LocalCommittee(Committee):
-    def __init__(self, names, port, workers, faults):
+    def __init__(self, names, port, workers, node_types, faults):
         assert isinstance(names, list)
         assert all(isinstance(x, str) for x in names)
         assert isinstance(port, int)
         assert isinstance(workers, int) and workers > 0
         addresses = OrderedDict((x, ['127.0.0.1']*(1+workers)) for x in names)
-        json = Committee.address_list_to_json(addresses, port, faults)
+        json = Committee.address_list_to_json(addresses, port, node_types, faults)
         super().__init__(json)
 
 
@@ -204,10 +205,15 @@ class NodeParameters:
             inputs += [json['max_batch_delay']]
             inputs += [json['acs_timeout']]
             inputs += [json['fallback_round']]
+            inputs += [json['node_types']]
         except KeyError as e:
             raise ConfigError(f'Malformed parameters: missing key {e}')
 
-        if not all(isinstance(x, int) for x in inputs):
+        if not all(isinstance(x, int) for x in inputs[:-1]):
+            raise ConfigError('Invalid parameters type')
+
+        #  Check if the node_types is a list
+        if not isinstance(inputs[-1], list):
             raise ConfigError('Invalid parameters type')
 
         self.json = json
@@ -235,6 +241,7 @@ class BenchParameters:
                 raise ConfigError('Missing input rate')
             self.rate = [int(x) for x in rate]
 
+            
             self.workers = int(json['workers'])
 
             if 'collocate' in json:
@@ -243,13 +250,13 @@ class BenchParameters:
                 self.collocate = True
 
             self.tx_size = int(json['tx_size'])
-
+           
             self.duration = int(json['duration'])
 
             self.runs = int(json['runs']) if 'runs' in json else 1
 
             self.burst = json['burst']
-
+            
         except KeyError as e:
             raise ConfigError(f'Malformed bench parameters: missing key {e}')
 

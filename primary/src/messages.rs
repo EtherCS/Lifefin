@@ -405,7 +405,6 @@ impl TimeoutCert {
             used.insert(*name);
             weight += voting_rights;
         }
-
         // Check if the accumulated weight meets the quorum threshold.
         ensure!(
             weight >= committee.quorum_threshold(),
