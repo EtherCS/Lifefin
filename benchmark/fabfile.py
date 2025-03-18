@@ -1,10 +1,11 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 from fabric import task
 
-from benchmark.local import LocalBench
+from benchmark.local import LocalBench, LocalInflationBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import Print, BenchError
 from benchmark.plot import Ploter, PlotError
+from benchmark.plot_inflation import InflationPlotter
 # from benchmark.instance import InstanceManager
 # from benchmark.remote import Bench, BenchError
 
@@ -159,3 +160,51 @@ def logs(ctx):
         print(LogParser.process('./logs', faults='?').result())
     except ParseError as e:
         Print.error(BenchError('Failed to parse logs', e))
+
+
+@task
+def inflation(ctx, debug=True):
+    ''' Run benchmarks on localhost '''
+    f = 3 # number of malicious nodes
+    crash_time = 30
+
+    bench_params = {
+        'faults': 0,
+        'nodes': 3*f+1,
+        'workers': 1,
+        'rate': 1_00,
+        'tx_size': 512,
+        'duration': 60,
+        "burst": 5
+    }
+    node_params = {
+        'header_size': 1_000,  # bytes
+        'max_header_delay': 0,  # ms
+        'gc_depth': 50,  # rounds
+        'sync_retry_delay': 10_000,  # ms
+        'sync_retry_nodes': 3,  # number of nodes
+        'batch_size': 50_000,  # bytes
+        'max_batch_delay': 200,  # ms
+        'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
+    }
+    try:
+        ret = LocalInflationBench(bench_params, node_params, crash_time).run(debug)
+        print(ret.result())
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def attackplot(ctx, output_path='inflation.pdf'):
+    ''' plot the results of inflation attack '''
+    # copy the bench params from the inflation bench
+    bench_params = {
+        'faults': 0,
+        "burst": 5
+    }
+
+    try:
+        plotter = InflationPlotter(burst=bench_params['burst'], faults=bench_params['faults'])
+        plotter.plot(output_path=output_path)
+    except PlotError as e:
+        Print.error(BenchError('Failed to plot for the inflation attack', e))
