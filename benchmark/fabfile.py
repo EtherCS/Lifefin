@@ -170,7 +170,7 @@ def logs(ctx):
 def inflation(ctx, debug=True):
     ''' Run benchmarks on localhost '''
     f = 3 # number of malicious nodes
-    crash_time = 30 # time (s) to crash an honest node
+    crash_time = 20 # time (s) to crash an honest node
 
     bench_params = {
         'faults': 0,
@@ -190,7 +190,7 @@ def inflation(ctx, debug=True):
         'batch_size': 50_000,  # bytes
         'max_batch_delay': 200,  # ms
         'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
-        'fallback_round': 0,  # rounds
+        'fallback_round': 1000,  # rounds
         'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
     }
     try:
@@ -208,9 +208,9 @@ def attackplot(ctx, output_path='inflation.pdf'):
         'faults': 0,
         "burst": 5
     }
-
+    plot_interval = 3 # second
     try:
         plotter = InflationPlotter(burst=bench_params['burst'], faults=bench_params['faults'])
-        plotter.plot(output_path=output_path)
+        plotter.plot(output_path=output_path, plot_interval=plot_interval)
     except PlotError as e:
         Print.error(BenchError('Failed to plot for the inflation attack', e))

@@ -33,7 +33,7 @@ class InflationPlotter:
         self.parser = LogParser.process(PathMaker.logs_path(), burst=burst, faults=faults)
 
 
-    def preprocess(self):
+    def preprocess(self, plot_interval):
         parser = self.parser
 
         start, end = min([min(parser.proposals.values()), min(parser.start)]), max(parser.proposals.values())
@@ -46,6 +46,10 @@ class InflationPlotter:
         culmulative_total_commit_bytes = 0
         last_culmulative_total_commit_bytes = 0
         for second, commits in commits_by_second:
+            # plot 0s for seconds with no commits
+            if second - previous_second > plot_interval:
+                for intverval in range(math.ceil(previous_second) + plot_interval, math.ceil(second), plot_interval):
+                    bytes_of_commits_by_second.append((intverval, 0, 0, culmulative_total_commit_bytes))
             total_bytes = sum([parser.sizes[k] for k, _ in commits if k in parser.sizes])
             if total_bytes == 0:
                 continue
@@ -61,6 +65,10 @@ class InflationPlotter:
         previous_second = 0
         culmulative_total_proposal_bytes = 0
         for second, proposals in proposals_by_second:
+            # plot 0s for seconds with no commits
+            # if second - previous_second > plot_interval:
+            #     for intverval in range(math.ceil(previous_second) + plot_interval, math.ceil(second), plot_interval):
+            #         bytes_of_proposals_by_second.append((intverval, 0, 0, culmulative_total_proposal_bytes))
             total_bytes = sum([parser.total_sizes[k] for k, t in proposals if k in parser.total_sizes])
             if total_bytes == 0:
                 continue
@@ -88,8 +96,8 @@ class InflationPlotter:
         return commits_df, proposals_df, uncommits_df
 
 
-    def plot(self, output_path):
-        commits_df, proposals_df, uncommits_df = self.preprocess()
+    def plot(self, output_path, plot_interval):
+        commits_df, proposals_df, uncommits_df = self.preprocess(plot_interval)
         if commits_df.empty or proposals_df.empty or uncommits_df.empty:
             print("No data to plot.")
             return

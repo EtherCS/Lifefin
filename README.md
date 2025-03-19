@@ -1,54 +1,54 @@
-# DAGACS
+# Evaluation of Inflation Attacks on Sailfish
 
-[![build status](https://img.shields.io/github/actions/workflow/status/asonnino/shamir-bip39/code.yml?branch=main&logo=github&style=flat-square)](https://github.com/asonnino/shamir-bip39/actions)
-[![rustc](https://img.shields.io/badge/rustc-1.78+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
-
-
-## License
-
-This software is licensed as [Apache 2.0](LICENSE).
-
-## Test
-```bash
-cd benchmark
-fab local
+## Evaluation of Attack without Mitigation
+Run the following command to run the protocol for **60** seconds and attack begins in **20** seconds
 ```
-By default, it will run **10** nodes for **60** seconds, where nodes will be stuck (i.e., entering the fallback consensus mode) in round **10**. After finishing the execution, the terminal will output:
+fab inflation
 ```
------------------------------------------
- SUMMARY:
------------------------------------------
- + CONFIG:
- Faults: 0 node(s)
- Committee size: 10 node(s)
- Worker(s) per node: 1 worker(s)
- Collocate primary and workers: True
- Input rate: 5,000,000 tx/s
- Transaction size: 512 B
- Execution time: 13 s
+Get a figure named **inflation.pdf**:
+```
+fab attackplot --output-path=inflation.pdf
+```
 
- Header size: 1 B
- Max header delay: 1,000 ms
- GC depth: 50 round(s)
- Sync retry delay: 10,000 ms
- Sync retry nodes: 3 node(s)
- batch size: 50,000 B
- Max batch delay: 200 ms
+Description of parameters
+```
+node_params = {
+    'header_size': 1_000,  # bytes
+    'max_header_delay': 0,  # ms, set 0 for attack
+    'gc_depth': 50,  # rounds
+    'sync_retry_delay': 10_000,  # ms
+    'sync_retry_nodes': 3,  # number of nodes
+    'batch_size': 50_000,  # bytes
+    'max_batch_delay': 200,  # ms
+    'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
+    'fallback_round': 0,  # round to trigger fallback, 0 indicates no mitigation
+    'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
+}
+```
 
- + RESULTS:
- Consensus TPS: 195,176 tx/s
- Consensus BPS: 99,930,002 B/s
- Consensus latency: 1,239 ms
- Consensus leader latency: 79 ms
- Consensus non leader latency: 601 ms
+## Evaluation of Attack with Mitigation
+Run the following command to run the protocol for **60** seconds and attack begins in **20** seconds, and trigger fallback in *fallback_round=1000*
+> Note: for test, *fallback_round* should be set appropriately (after a node is crashed but before the test is finished). In our test, we find set fallback_round=1000 is enough.
+```
+fab inflation
+```
+Get a figure named **resist.pdf**:
+```
+fab attackplot --output-path=resist.pdf
+```
 
- End-to-end TPS: 195,059 tx/s
- End-to-end BPS: 99,870,214 B/s
- End-to-end latency: 2,330 ms
-
- ACS Leader latency: 97 ms
- Fallback latency: 94 ms
- ACS data size: 145,681 B
------------------------------------------
+Description of parameters
+```
+node_params = {
+    'header_size': 1_000,  # bytes
+    'max_header_delay': 0,  # ms, set 0 for attack
+    'gc_depth': 50,  # rounds
+    'sync_retry_delay': 10_000,  # ms
+    'sync_retry_nodes': 3,  # number of nodes
+    'batch_size': 50_000,  # bytes
+    'max_batch_delay': 200,  # ms
+    'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
+    'fallback_round': 1000,  # round to trigger fallback, 0 indicates no mitigation
+    'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
+}
 ```
