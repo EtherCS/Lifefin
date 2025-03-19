@@ -5,9 +5,9 @@ use crate::acs_types::{
     FINMVBAView, MVBAProposal, MVBAVote, MetaPoSTBlockData, PoSTBlockVote,
 };
 use crate::aggregators::{
-    AttackerCertificateAggregator, CertificatesAggregator, CertifiedMVBAVoteAggregator, CertifiedPoSTVoteAggregator,
-    NoVoteAggregator, PisaAuxAggregator, PisaBvalAggregator, PisaDesicionAggregator,
-    TimeoutAggregator, VotesAggregator,
+    AttackerCertificateAggregator, CertificatesAggregator, CertifiedMVBAVoteAggregator,
+    CertifiedPoSTVoteAggregator, NoVoteAggregator, PisaAuxAggregator, PisaBvalAggregator,
+    PisaDesicionAggregator, TimeoutAggregator, VotesAggregator,
 };
 use crate::error::{DagError, DagResult};
 use crate::messages::{
@@ -120,6 +120,8 @@ pub struct Core {
     rx_fallback: Receiver<u64>,
     /// Weather this node is an attacker or not.
     node_type: NodeType, //*
+    current_stuck_round: Round, // to avoid fallback msgs being garbage collected
+    tx_attack_switch: Sender<NodeType>,
 }
 
 impl Core {
@@ -149,6 +151,7 @@ impl Core {
         tx_acs_consensus: Sender<(ACSOutput, Certificate)>,
         rx_fallback: Receiver<u64>,
         node_type: NodeType,
+        tx_attack_switch: Sender<NodeType>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -194,6 +197,8 @@ impl Core {
                 tx_acs_consensus,
                 rx_fallback,
                 node_type,
+                current_stuck_round: 0,
+                tx_attack_switch,
             }
             .run()
             .await;
@@ -385,9 +390,20 @@ impl Core {
             }
         }
 
+        // For testing (the attack resistance) only, we only attack until the fallback is triggered
+        if header.round == self.fallback_round {
+            debug!("Attacker node stops attacking");
+            self.node_type = NodeType::Honest;
+            self.tx_attack_switch
+                .send(NodeType::Honest)
+                .await
+                .expect("Failed to send attack switch");
+        }
+
         if header.round == self.fallback_round
             && self.consensus_mode == ConsensusMode::Optimistic
             && self.acs_manager.last_acs_round < header.round
+            && header.author == self.name
         {
             let _ = self.switch_to_fallback_mode().await;
         }
@@ -525,7 +541,6 @@ impl Core {
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
-        
         // Ensuring attacker node does not link with the leader node of the previous round.
         match self.node_type {
             NodeType::Honest => (),
@@ -545,10 +560,12 @@ impl Core {
 
                 let leader = self.committee.leader(certificate.round() as usize);
                 if leader.eq(&certificate.origin()) {
-                    info!("Attacker is not adding the certificate of the leader node of round {}", certificate.round());
+                    info!(
+                        "Attacker is not adding the certificate of the leader node of round {}",
+                        certificate.round()
+                    );
                     return Ok(());
                 }
-
             }
         }
 
@@ -610,9 +627,9 @@ impl Core {
 
         // Send the meta post to each address.
         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-
+        self.current_stuck_round = my_own_post_block.stuck_block.round;
         self.cancel_handlers
-            .entry(my_own_post_block.stuck_block.round)
+            .entry(self.current_stuck_round)
             .or_insert_with(Vec::new)
             .extend(handlers);
 
@@ -652,7 +669,7 @@ impl Core {
                 .expect("Failed to serialize PoST block vote");
             let handler = self.network.send(address, Bytes::from(bytes)).await;
             self.cancel_handlers
-                .entry(meta_post_block.stuck_block.round)
+                .entry(self.current_stuck_round)
                 .or_insert_with(Vec::new)
                 .push(handler);
         }
@@ -681,7 +698,7 @@ impl Core {
                     .expect("Failed to serialize PoST block");
             let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
             self.cancel_handlers
-                .entry(post_block.meta_post.stuck_block.round)
+                .entry(self.current_stuck_round)
                 .or_insert_with(Vec::new)
                 .extend(handlers);
             // This is our post block, it must deliver via RBC
@@ -713,7 +730,6 @@ impl Core {
                 .post_block_aggregator
                 .append(post_block.clone().meta_post, &self.committee)?
             {
-                let handler_round = post_block.clone().meta_post.stuck_block.round;
                 // create our mvba proposal
                 let mvba_proposal = MVBAProposal::new(
                     self.name,
@@ -737,7 +753,7 @@ impl Core {
                 let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
 
                 self.cancel_handlers
-                    .entry(handler_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -746,7 +762,7 @@ impl Core {
     }
 
     async fn vote_certified_post_block(&mut self, post_block: CertifiedPoSTBlockData) {
-        let handler_round = post_block.clone().meta_post.stuck_block.round;
+        // let handler_round = post_block.clone().meta_post.stuck_block.round;
         let addresses = self
             .committee
             .others_primaries(&self.name)
@@ -763,7 +779,7 @@ impl Core {
         .expect("Failed to serialize certified PoST block vote");
         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
         self.cancel_handlers
-            .entry(handler_round)
+            .entry(self.current_stuck_round)
             .or_insert_with(Vec::new)
             .extend(handlers);
     }
@@ -820,7 +836,7 @@ impl Core {
                 .expect("Failed to serialize PoST block vote");
             let handler = self.network.send(address, Bytes::from(bytes)).await;
             self.cancel_handlers
-                .entry(mvba_proposal.acs_round)
+                .entry(self.current_stuck_round)
                 .or_insert_with(Vec::new)
                 .push(handler);
         }
@@ -845,7 +861,7 @@ impl Core {
                 .expect("Failed to serialize PoST block");
             let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
             self.cancel_handlers
-                .entry(mvba.proposal.acs_round)
+                .entry(self.current_stuck_round)
                 .or_insert_with(Vec::new)
                 .extend(handlers);
             // This is our mvba, it must deliver via RBC
@@ -855,7 +871,7 @@ impl Core {
     }
 
     async fn process_mvba_after_rbc(&mut self, mvba: CertifiedMVBA) -> DagResult<()> {
-        debug!("Processing mvba {:?}", mvba);
+        debug!("Processing certified mvba {:?}", mvba);
         if self
             .acs_manager
             .mvba_proposal_aggregator
@@ -919,7 +935,7 @@ impl Core {
         .expect("Failed to serialize certified mvba vote");
         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
         self.cancel_handlers
-            .entry(mvba.proposal.acs_round)
+            .entry(self.current_stuck_round)
             .or_insert_with(Vec::new)
             .extend(handlers);
     }
@@ -982,7 +998,7 @@ impl Core {
             .await;
 
         self.cancel_handlers
-            .entry(bval_message.view.aba_round)
+            .entry(self.current_stuck_round)
             .or_insert_with(Vec::new)
             .extend(handlers);
 
@@ -1014,7 +1030,7 @@ impl Core {
                 .await;
 
             self.cancel_handlers
-                .entry(aux_message.view.mvba_round)
+                .entry(self.current_stuck_round)
                 .or_insert_with(Vec::new)
                 .extend(handlers);
 
@@ -1170,7 +1186,7 @@ impl Core {
                             .await;
 
                         self.cancel_handlers
-                            .entry(bval_majr_message.view.mvba_round)
+                            .entry(self.current_stuck_round)
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
@@ -1206,7 +1222,7 @@ impl Core {
                             .await;
 
                         self.cancel_handlers
-                            .entry(bval_majr_message.view.mvba_round)
+                            .entry(self.current_stuck_round)
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
@@ -1244,7 +1260,7 @@ impl Core {
                             .await;
 
                         self.cancel_handlers
-                            .entry(aux_message.view.mvba_round)
+                            .entry(self.current_stuck_round)
                             .or_insert_with(Vec::new)
                             .extend(handlers);
 
@@ -1292,7 +1308,7 @@ impl Core {
                         .await;
 
                     self.cancel_handlers
-                        .entry(aux_message.view.mvba_round)
+                        .entry(self.current_stuck_round)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
                     self.acs_manager.acs_fin.aux_sent = true;
@@ -1373,7 +1389,7 @@ impl Core {
                     .await;
 
                 self.cancel_handlers
-                    .entry(message.view.mvba_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -1430,7 +1446,7 @@ impl Core {
                         .await;
 
                     self.cancel_handlers
-                        .entry(pillar_bval.view.mvba_round)
+                        .entry(self.current_stuck_round)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
                 }
@@ -1488,7 +1504,7 @@ impl Core {
                     )
                     .await;
                 self.cancel_handlers
-                    .entry(pisa_aux.view.clone().mvba_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
                 // In aba_round = 0, we only decide on 1, everything is done
@@ -1528,7 +1544,7 @@ impl Core {
                         .broadcast_bval_message(&self.committee, bval_message, &mut self.network)
                         .await;
                     self.cancel_handlers
-                        .entry(pisa_aux.view.mvba_round)
+                        .entry(self.current_stuck_round)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
                 }
@@ -1561,7 +1577,7 @@ impl Core {
                     .broadcast_bval_message(&self.committee, bval_message, &mut self.network)
                     .await;
                 self.cancel_handlers
-                    .entry(pisa_aux.view.mvba_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -1612,7 +1628,7 @@ impl Core {
                     )
                     .await;
                 self.cancel_handlers
-                    .entry(pillar_aux.view.clone().mvba_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
                 if b == 1 {
@@ -1681,7 +1697,7 @@ impl Core {
                     .broadcast_bval_message(&self.committee, bval_message, &mut self.network)
                     .await;
                 self.cancel_handlers
-                    .entry(pillar_aux.view.clone().mvba_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
             }
@@ -1712,7 +1728,7 @@ impl Core {
                     )
                     .await;
                 self.cancel_handlers
-                    .entry(desicion.view.clone().mvba_round)
+                    .entry(self.current_stuck_round)
                     .or_insert_with(Vec::new)
                     .extend(handlers);
 
@@ -2235,7 +2251,7 @@ impl Core {
                         },
                     }
                 },
-                 
+
                 // We also receive here our timeout created by the `Proposer`.
                 Some(timeout) = self.rx_timeout.recv() => self.process_own_timeout(timeout).await,
                 // We also receive here our no vote messages created by the `Proposer`.
@@ -2267,7 +2283,8 @@ impl Core {
                 self.last_voted.retain(|k, _| k >= &gc_round);
                 self.processing.retain(|k, _| k >= &gc_round);
                 self.certificates_aggregators.retain(|k, _| k >= &gc_round);
-                self.attacker_certificate_aggregators.retain(|k, _| k >= &gc_round);
+                self.attacker_certificate_aggregators
+                    .retain(|k, _| k >= &gc_round);
                 self.cancel_handlers.retain(|k, _| k >= &gc_round);
                 self.gc_round = gc_round;
             }

@@ -9,9 +9,9 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::info;
 use log::{debug, warn};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
-use std::collections::HashMap;
 
 // #[cfg(test)]
 // #[path = "tests/proposer_tests.rs"]
@@ -74,6 +74,8 @@ pub struct Proposer {
     certificates: HashMap<Round, Vec<Certificate>>,
     /// Type of the node is running this proposer.
     node_type: NodeType,
+    /// Receives the attack switch from the core.
+    rx_attack_switch: Receiver<NodeType>,
 }
 
 impl Proposer {
@@ -94,6 +96,7 @@ impl Proposer {
         rx_post_proposer: Receiver<(Vec<MetaPoSTBlockData>, Vec<Certificate>, Round)>,
         rx_core_certificates: Receiver<(Vec<Certificate>, Round)>,
         node_type: NodeType,
+        rx_attack_switch: Receiver<NodeType>,
     ) {
         let genesis = Certificate::genesis(&committee);
         tokio::spawn(async move {
@@ -116,14 +119,15 @@ impl Proposer {
                 last_leader: None,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
-                last_timeout_cert: TimeoutCert:: new(0),
-                last_no_vote_cert: NoVoteCert:: new(0),
+                last_timeout_cert: TimeoutCert::new(0),
+                last_no_vote_cert: NoVoteCert::new(0),
                 rx_post_proposer,
                 last_certificates: (Vec::new(), 0),
                 last_timeout_certs: Vec::new(),
                 parents: HashMap::new(),
                 certificates: HashMap::new(),
                 node_type,
+                rx_attack_switch,
             }
             .run()
             .await;
@@ -239,7 +243,7 @@ impl Proposer {
 
         self.last_leader.is_some()
     }
-    
+
     // Check that the leader is not in the parents of an attacker node.
     fn check_leader(&mut self) -> bool {
         let leader_name = self.committee.leader(self.round as usize);
@@ -248,7 +252,7 @@ impl Proposer {
             .iter()
             .find(|x| x.origin() == leader_name)
             .cloned();
-        
+
         leader.is_some()
     }
 
@@ -280,25 +284,40 @@ impl Proposer {
     }
 
     fn add_timeout_cert(&mut self, timeout_cert: TimeoutCert) -> TimeoutCert {
-        if let Some(pos) = self.last_timeout_certs.iter().position(|x| x.round == timeout_cert.round) {
+        if let Some(pos) = self
+            .last_timeout_certs
+            .iter()
+            .position(|x| x.round == timeout_cert.round)
+        {
             self.last_timeout_certs[pos] = timeout_cert.clone();
         } else {
             self.last_timeout_certs.push(timeout_cert.clone());
-            
         }
 
         if self.round >= timeout_cert.round {
             timeout_cert
         } else {
-            self.last_timeout_certs.iter().find(|x| x.round == self.round).cloned().unwrap_or_else(|| TimeoutCert::new(0))
+            self.last_timeout_certs
+                .iter()
+                .find(|x| x.round == self.round)
+                .cloned()
+                .unwrap_or_else(|| TimeoutCert::new(0))
         }
     }
 
     fn update_timeout_certs(&mut self) {
-        if let Some(pos) = self.last_timeout_certs.iter().position(|x| x.round == self.round - 1) {
+        if let Some(pos) = self
+            .last_timeout_certs
+            .iter()
+            .position(|x| x.round == self.round - 1)
+        {
             self.last_timeout_certs.remove(pos);
         }
-        if let Some(timeout_cert) = self.last_timeout_certs.iter().find(|x| x.round == self.round) {
+        if let Some(timeout_cert) = self
+            .last_timeout_certs
+            .iter()
+            .find(|x| x.round == self.round)
+        {
             self.last_timeout_cert = timeout_cert.clone();
         }
     }
@@ -327,20 +346,22 @@ impl Proposer {
             let timer_expired = timer.is_elapsed();
             let has_certificates = match self.node_type {
                 NodeType::Honest => true,
-                NodeType::Attacker => {
-                    self.last_certificates.1 == self.round + 1
-                }
+                NodeType::Attacker => self.last_certificates.1 == self.round + 1,
             };
 
             // TODO: This has to be fixed by sending timeout only once.
-            if timer_expired && !timeout_sent  {
+            if timer_expired && !timeout_sent {
                 warn!("Timer expired for round {}", self.round);
                 self.make_timeout_msg().await;
                 timeout_sent = true;
             }
 
-            if ((timer_expired && timeout_cert_gathered && (!is_next_leader || no_vote_cert_gathered)) || (enough_digests && advance)) && enough_parents {
-                
+            if ((timer_expired
+                && timeout_cert_gathered
+                && (!is_next_leader || no_vote_cert_gathered))
+                || (enough_digests && advance))
+                && enough_parents
+            {
                 if timer_expired && self.last_leader.is_none() && !is_next_leader && !no_vote_sent {
                     self.make_no_vote_msg().await;
                     no_vote_sent = true;
@@ -363,7 +384,7 @@ impl Proposer {
                     timer.as_mut().reset(deadline);
                     timeout_sent = false;
                     no_vote_sent = false;
-                }   
+                }
             }
 
             tokio::select! {
@@ -389,7 +410,7 @@ impl Proposer {
                         Ordering::Greater => {
                             // We accept round bigger than our current round to jump ahead in case we were
                             // late (or just joined the network).
-                            
+
                             match self.node_type {
                                 NodeType::Honest => {
                                     self.round = round;
@@ -448,7 +469,11 @@ impl Proposer {
                             // Ignore parents from the current round.
                             continue;
                         },
-                    }   
+                    }
+                }
+                Some(node_type) = self.rx_attack_switch.recv() => {
+                    self.node_type = node_type;
+                    self.max_header_delay = 1000; // for test only
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     self.payload_size += digest.size();

@@ -17,7 +17,7 @@ use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
 use bytes::Bytes;
-use config::{Committee, KeyPair, Parameters, NodeType, WorkerId};
+use config::{Committee, KeyPair, NodeType, Parameters, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::sink::SinkExt as _;
 use log::info;
@@ -108,6 +108,8 @@ impl Primary {
         let (tx_post_proposer, rx_post_proposer) = channel(CHANNEL_CAPACITY);
 
         let (tx_certificates_attacker, rx_certificates_attacker) = channel(CHANNEL_CAPACITY);
+        let (tx_attack_switch, rx_attack_switch) = channel(CHANNEL_CAPACITY);
+
         // Write the parameters to the logs.
         parameters.log();
 
@@ -202,6 +204,7 @@ impl Primary {
             tx_acs_consensus,
             rx_fallback,
             node_type.clone(),
+            tx_attack_switch,
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -249,8 +252,9 @@ impl Primary {
             tx_no_vote_msg,
             rx_no_vote_cert,
             rx_post_proposer,
-            /* rx_core_certificates*/rx_certificates_attacker,
+            /* rx_core_certificates*/ rx_certificates_attacker,
             node_type.clone(),
+            rx_attack_switch,
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.
