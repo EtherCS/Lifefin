@@ -1,13 +1,13 @@
 # Evaluation of Inflation Attacks on Sailfish
 
 ## Evaluation of Attack without Mitigation
-Run the following command to run the protocol for **60** seconds and attack begins in **20** seconds
+Run the following command to run the protocol for **60** seconds and attack begins in **20** seconds. With the parameter *fallback-round=0*, we don't have fallback mode.
 ```
-fab inflation
+fab inflation --fallback-round=0
 ```
-Get a figure named **inflation.pdf**:
+Get a figure named **sf-inflation.pdf**:
 ```
-fab attackplot --output-path=inflation.pdf
+fab attackplot --output-path=sf-inflation.pdf
 ```
 
 Description of parameters
@@ -27,14 +27,14 @@ node_params = {
 ```
 
 ## Evaluation of Attack with Mitigation
-Run the following command to run the protocol for **60** seconds and attack begins in **20** seconds, and trigger fallback in *fallback_round=1000*
+Run the following command to run the protocol for **60** seconds and attack begins in **20** seconds, and trigger fallback in *fallback_round=1000*.
 > Note: for test, *fallback_round* should be set appropriately (after a node is crashed but before the test is finished). In our test, we find set fallback_round=1000 is enough.
 ```
-fab inflation
+fab inflation --fallback-round=1000
 ```
-Get a figure named **resist.pdf**:
+Get a figure named **sf-resist.pdf**:
 ```
-fab attackplot --output-path=resist.pdf
+fab attackplot --output-path=sf-resist.pdf
 ```
 
 Description of parameters

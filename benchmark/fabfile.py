@@ -167,7 +167,7 @@ def logs(ctx):
 
 
 @task
-def inflation(ctx, debug=True):
+def inflation(ctx, fallback_round=0, debug=True):
     ''' Run benchmarks on localhost '''
     f = 3 # number of malicious nodes
     crash_time = 20 # time (s) to crash an honest node
@@ -178,7 +178,7 @@ def inflation(ctx, debug=True):
         'workers': 1,
         'rate': 3_00,
         'tx_size': 512,
-        'duration': 60,
+        'duration': 100,
         "burst": 5
     }
     node_params = {
@@ -190,7 +190,7 @@ def inflation(ctx, debug=True):
         'batch_size': 50_000,  # bytes
         'max_batch_delay': 200,  # ms
         'acs_timeout': 3_600_000,  # ms, we set it to 1 hour
-        'fallback_round': 1000,  # rounds
+        'fallback_round': fallback_round,  # rounds
         'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
     }
     try:
@@ -201,7 +201,7 @@ def inflation(ctx, debug=True):
 
 
 @task
-def attackplot(ctx, output_path='inflation.pdf'):
+def attackplot(ctx, output_path='sf-inflation.pdf'):
     ''' plot the results of inflation attack '''
     # copy the bench params from the inflation bench
     bench_params = {
