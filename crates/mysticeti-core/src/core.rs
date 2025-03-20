@@ -241,6 +241,15 @@ impl<H: BlockHandler> Core<H> {
             .metrics
             .utilization_timer
             .utilization_timer("Core::add_blocks");
+        // For attack resistance test only
+        // Since we kill one hoenst node, to trigger fallback, we choose to stop attack
+        for block in &blocks {
+            if block.round() == self.acs_trigger_round {
+                tracing::info!("ACS trigger round reached, stopping attack");
+                self.attack_type = AttackType::Honest;
+                self.threshold_clock.set_attack_type(AttackType::Honest);
+            }
+        }
         let processed = self
             .block_manager
             .add_blocks(blocks, &mut (&mut self.wal_writer, &self.block_store));
