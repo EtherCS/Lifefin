@@ -1,27 +1,27 @@
-# DAGACS
-
-[![build status](https://img.shields.io/github/actions/workflow/status/asonnino/shamir-bip39/code.yml?branch=main&logo=github&style=flat-square)](https://github.com/asonnino/shamir-bip39/actions)
-[![rustc](https://img.shields.io/badge/rustc-1.78+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
-
-
-## License
-
-This software is licensed as [Apache 2.0](LICENSE).
-
-## Test
-```bash
-cd scripts
-bash acsdryrun.sh 4 1 500 60
+# Evaluation of Inflation Attacks on Mysticeti-ACS
+```
+cd benchmark
+pip install -r requirements.txt
 ```
 
-This command runs **4** nodes (**1** of which are crashed) for **60** seconds, where nodes will be stuck (i.e., entering the fallback consensus mode) in round **500**. After executing this command, check the log file (e.g., `v0.acs.log.ansi`). The nodes are considered to run the fallback consensus mode successfully if the relevant information are printed as follows:
+## Evaluation of Attack without Solution
+Run
 ```
-...
-2024-11-09T20:49:00.766472Z DEBUG mysticeti_core::core: Committing ACS output ACSOutput { round: 500, [A500:[A499,B498,C499,D499,](), B500:[B499,C499,D499,A499,](), C500 [C499,B498,D499,A499,]()] }
-2024-11-09T20:49:00.766577Z DEBUG mysticeti_core::core: New leader block A500:[A499,B498,C499,D499,]()
-...
+fab inflation
 ```
+By default, it runs **10** nodes (of which **3** are attackers) for **total_time=100** seconds. The attackers will start attacking at **crash_time=20**. After the process finished, run the following command to get figure named *my-inflation.pdf*:
+```
+fab plot --log-dir='.' --log-prex='attack' --output-path='my-inflation.pdf'
+```
+> Note that it may take a while to generate the figure as the log files are too large.
 
-## Observations
-**Performance degradation:** While recovering to optmistic mode from ACS mode, nodes may experience a *hangover* period, leading to the performance degradation. Specifically, some nodes need to synchronize the missing blocks included by the ACS output and cannot catch up the latest round. The other nodes therefore have to either be stuck (if *>f* nodes need to sync) or wait for a leader timeout (if *<=f* nodes need to sync) to move to next rounds.
+## Evaluation of Attack with Solution
+Run
+```
+fab resist
+```
+By default, it runs **10** nodes (of which **3** are attackers) for **total_time=100** seconds. The attackers will start attacking at **crash_time=20**. The fallback will be triggered at **stuck_round=80**. After the process finished, run the following command to get figure named *my-resist.pdf*:
+```
+fab plot --log-dir='.' --log-prex='resist' --output-path='my-resist.pdf'
+```
+> Note: for test, stuck_round should be set appropriately (after the attack begins and before the test is finished). In our test, we find set stuck_round=80 is enough.

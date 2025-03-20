@@ -23,7 +23,8 @@ cobertura.xml
 
 # logs
 *.log.ansi
-*.txt
+*certified.txt
+*committed.txt
 wal
 
 # benchmark setting
