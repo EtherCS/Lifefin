@@ -29,3 +29,10 @@ def clean():
     os.system("rm -rf dryattackrun-validator-* || true")
     # stop any running tmux sessions
     os.system("tmux kill-server || true")
+
+def clean_resist():
+    print("Cleaning up logs")
+    os.system("rm resist.v* || true")
+    os.system("rm -rf attackresistrun-validator-* || true")
+    # stop any running tmux sessions
+    os.system("tmux kill-server || true")

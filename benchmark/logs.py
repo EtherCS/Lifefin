@@ -76,8 +76,8 @@ class Parser:
         self.tx_size = tx_size
     
 
-    def parse_logs(self, log_dir):
-        logs = list(pathlib.Path(log_dir).rglob('*.ansi'))
+    def parse_logs(self, log_dir, log_prex):
+        logs = list(pathlib.Path(log_dir).rglob(f'{log_prex}*.ansi'))
 
         with Pool(min(cpu_count(), len(logs))) as p:
             results = p.map(parse_log, logs)
