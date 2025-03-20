@@ -4,22 +4,24 @@ import time
 
 from fabric import task
 
+from logs import Parser
+from plot import Plotter
 from utils import get_mysticeti_path, build_mysticeti, check_mysticeti_path, clean
 
 
 @task
-def inflation(c):
+def inflation(ctx):
     ''' Run benchmarks on localhost '''
     f = 3
     committee_size = 3*f + 1
     bench_params = {
-        'rate': 5_000,
+        'rate': 1_000,
         'tx_size': 512,
-        'delay': 1,
+        'delay': 0,
     }
 
-    total_time = 101 # total time to run the benchmark
-    crash_time = 51 # time to crash the honest node
+    total_time = 60 # total time to run the benchmark
+    crash_time = 30 # time to crash the honest node
 
     if not check_mysticeti_path():
         mysticeti_path = build_mysticeti()
@@ -42,21 +44,34 @@ def inflation(c):
         session_name = f"v{i}"
         log_file = f"attack.v{i}.log.ansi"
         cmd = f"export RUST_LOG={rust_log} && {mysticeti_path} dry-attack-run --committee-size {committee_size} --authority {i} --attack-type {attack_type}  --load {load_per_node} --transaction-size {tx_size} --initial-delay {delay} > {log_file}"
-        c.run(f"tmux new -d -s {session_name} \"{cmd}\"")
+        ctx.run(f"tmux new -d -s {session_name} \"{cmd}\"")
 
+    print(f"Running benchmark for {total_time} seconds")
+    print(f"Crashing the last node after {crash_time} seconds")
     time.sleep(crash_time)
 
-    c.run("curl http://0.0.0.0:1520/metrics > ./log1.txt")
-
     # kill the last node
-    c.run(f"tmux send-keys -t v{3*f}:0 C-c") # crash the last node (honest node)
+    print("Crashing the last node (honest node)")
+    ctx.run(f"tmux send-keys -t v{3*f}:0 C-c") # crash the last node (honest node)
 
 
     time.sleep(total_time - crash_time) # wait for the rest of the time
-    c.run("curl http://0.0.0.0:1520/metrics > ./log2.txt")
-    c.run("tmux kill-server || true") 
+    ctx.run("tmux kill-server || true") 
 
 
 @task
-def plot(ctx):
-    pass
+def plot(ctx, output_path="inflation.pdf"):
+    ''' Plot the results of the benchmark '''
+    bench_params = {
+        'rate': 1_000,
+        'tx_size': 512,
+        'block_size': 512,
+    }
+
+    print("Plotting the results, parsing logs...")
+    parser = Parser(bench_params['block_size'], bench_params['tx_size'])
+    parser.parse_logs(".")
+    print("Parsing done, plotting...")
+    commits_df, proposals_df, uncommits_df = parser.get_metrics_data()
+    plotter = Plotter(proposals_df, commits_df, uncommits_df)
+    plotter.plot(output_path)

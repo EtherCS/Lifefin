@@ -16,7 +16,7 @@ def check_mysticeti_path():
 
 
 def build_mysticeti():
-    os.system("cargo build --release")
+    os.system(f"cd {PAR_DIR} && cargo build --release")
     if not check_mysticeti_path():
         raise Exception(f"Failed to build Mysticeti. {MYSTICETI_PATH} does not exist.")
     print(f"Mysticeti built successfully at {MYSTICETI_PATH}")
@@ -26,6 +26,6 @@ def build_mysticeti():
 def clean():
     # clean up
     os.system("rm attack.v* || true")
-    os.system("pwd && rm -rf dryattackrun-validator-*")
+    os.system("rm -rf dryattackrun-validator-* || true")
     # stop any running tmux sessions
     os.system("tmux kill-server || true")
