@@ -1,12 +1,14 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashMap};
 
 use crate::{
     committee::{Committee, QuorumThreshold, StakeAggregator},
-    types::{BlockReference, RoundNumber, StatementBlock},
+    types::{AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
 };
+
+use acs::adversary::AttackType;
 
 // A block is threshold clock valid if:
 // - all included blocks have a round number lower than the block round number.
@@ -38,14 +40,22 @@ pub fn threshold_clock_valid_non_genesis(block: &StatementBlock, committee: &Com
 
 pub struct ThresholdClockAggregator {
     aggregator: StakeAggregator<QuorumThreshold>,
+    future_aggregators: HashMap<RoundNumber, StakeAggregator<QuorumThreshold>>,
     round: RoundNumber,
+    proposed_round: RoundNumber,
+    adversary_authority: AuthorityIndex,  
+    attack_type: AttackType,
 }
 
 impl ThresholdClockAggregator {
     pub fn new(round: RoundNumber) -> Self {
         Self {
             aggregator: StakeAggregator::new(),
-            round,
+            future_aggregators: HashMap::new(),
+            round: round,
+            proposed_round: 0,
+            adversary_authority: 0,
+            attack_type: AttackType::Honest,
         }
     }
 
@@ -55,15 +65,64 @@ impl ThresholdClockAggregator {
             Ordering::Less => {}
             // If we processed block for round r, we also have stored 2f+1 blocks from r-1
             Ordering::Greater => {
-                self.aggregator.clear();
-                self.aggregator.add(block.authority, committee);
-                self.round = block.round;
+                match self.attack_type {
+                    AttackType::Inflation => {
+                        // store the future blocks
+                        if !self.future_aggregators.contains_key(&block.round) {
+                            let mut aggregator = StakeAggregator::new();
+                            aggregator.add(block.authority, committee);
+                            self.future_aggregators.insert(block.round, aggregator);
+                        } else {
+                            self.future_aggregators.get_mut(&block.round).unwrap().add(block.authority, committee);
+                        }
+
+                        // check if we can advance: if we already propose a block in this round, advance
+                        if self.round == self.proposed_round {
+                            self.round = self.round + 1;
+                            if self.future_aggregators.contains_key(&self.round) {
+                                self.aggregator = self.future_aggregators.remove(&self.round).unwrap();
+                            } else {
+                                self.aggregator.clear();
+                            }
+                            self.release_old_aggregators(self.round);
+                        }
+                    }
+                    _ => {
+                        // for honest nodes, the logic does not change
+                        self.aggregator.clear();
+                        self.aggregator.add(block.authority, committee);
+                        self.round = block.round;
+                    }
+                }
+                
             }
             Ordering::Equal => {
+                if block.authority == self.adversary_authority {
+                    // The adversary is proposing a block. Then we can advance the round if we have seen 2f+1 blocks
+                    self.proposed_round = block.round;
+                }
+                
                 if self.aggregator.add(block.authority, committee) {
-                    self.aggregator.clear();
-                    // We have seen 2f+1 blocks for current round, advance
-                    self.round = block.round + 1;
+                    match self.attack_type {
+                        AttackType::Inflation => {
+                            // If the attacker does not propose in this round, we should not advance
+                            if block.round == self.proposed_round {
+                                self.round = block.round + 1;
+                                if self.future_aggregators.contains_key(&self.round) {
+                                    self.aggregator = self.future_aggregators.remove(&self.round).unwrap();
+                                } else {
+                                    self.aggregator.clear();
+                                }
+                                self.release_old_aggregators(self.round);
+                            }
+                        }
+                        _ => {
+                            // for honest nodes, the logic does not change
+                            self.aggregator.clear();
+                            // We have seen 2f+1 blocks for current round, advance
+                            self.round = block.round + 1;
+                        }
+                    }
                 }
             }
         }
@@ -73,8 +132,25 @@ impl ThresholdClockAggregator {
         }
     }
 
+    pub fn set_adversary_authority(&mut self, authority: AuthorityIndex) {
+        self.adversary_authority = authority;
+    }
+
+    pub fn set_attack_type(&mut self, attack_type: AttackType) {
+        self.attack_type = attack_type;
+    }
+
     pub fn get_round(&self) -> RoundNumber {
         self.round
+    }
+
+    pub fn release_old_aggregators(&mut self, round: RoundNumber) {
+        let keys: Vec<RoundNumber> = self.future_aggregators.keys().cloned().collect();
+        for key in keys {
+            if key < round {
+                self.future_aggregators.remove(&key);
+            }
+        }
     }
 }
 

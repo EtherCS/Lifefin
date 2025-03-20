@@ -92,6 +92,15 @@ enum Operation {
         /// The number of authorities in the committee.
         #[clap(long, value_name = "INT")]
         committee_size: usize,
+        /// The load of committee
+        #[clap(long, value_name = "INT", default_value = "10")]
+        load: usize,
+        /// The transaction size
+        #[clap(long, value_name = "INT", default_value = "512")]
+        transaction_size: usize,
+        /// The initial delay
+        #[clap(long, value_name = "INT", default_value = "30")]
+        initial_delay: u64,
     },
 }
 
@@ -140,7 +149,10 @@ async fn main() -> Result<()> {
             attack_type,
             authority,
             committee_size,
-        } => dryattackrun(attack_type, authority, committee_size).await?,
+            load,
+            transaction_size,
+            initial_delay,
+        } => dryattackrun(attack_type, authority, committee_size, load, transaction_size, initial_delay).await?,
     }
 
     Ok(())
@@ -359,6 +371,9 @@ async fn dryattackrun(
     attack_type_index: AttackTypeIndex,
     authority: AuthorityIndex,
     committee_size: usize,
+    load: usize,
+    transaction_size: usize,
+    initial_delay: u64,
 ) -> Result<()> {
     let attack_type = if let Some(attack_type) = AttackType::from_index(attack_type_index) {
         tracing::warn!(
@@ -372,10 +387,16 @@ async fn dryattackrun(
 
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
-    let client_parameters = ClientParameters::default();
+    let client_parameters = ClientParameters {
+        load: load,
+        transaction_size: transaction_size,
+        initial_delay: std::time::Duration::from_secs(initial_delay),
+        ..ClientParameters::default()
+    };
     let node_parameters = NodeParameters::default()
         .with_number_of_leaders(1)
-        .with_attack_type(attack_type);
+        .with_attack_type(attack_type)
+        .with_leader_timeout(std::time::Duration::from_secs(2));
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryattackrun-validator-{authority}"));

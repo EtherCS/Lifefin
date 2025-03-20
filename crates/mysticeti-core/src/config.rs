@@ -143,6 +143,11 @@ impl NodeParameters {
         self
     }
 
+    pub fn with_leader_timeout(mut self, leader_timeout: Duration) -> Self {
+        self.leader_timeout = leader_timeout;
+        self
+    }
+
     pub fn with_acs_timeout(mut self, timeout: Duration) -> Self {
         self.acs_timeout = timeout;
         self

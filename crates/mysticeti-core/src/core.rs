@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use acs::acs_types::ConsensusMode;
+use acs::{acs_types::ConsensusMode, adversary::AttackType};
 
 use minibytes::Bytes;
 
@@ -73,13 +73,16 @@ pub struct Core<H: BlockHandler> {
     acs_trigger_round: u64, // (test only): nodes enter ACS mode at this round
     last_acs_start_time: Duration, // (for benchmark measurement only) the time when starting the ACS
     pub network_connections: Arc<RwLock<HashMap<AuthorityIndex, mpsc::Sender<NetworkMessage>>>>,
+    attack_type: AttackType, // note that this is only used for testing
+    round_blocks: HashMap<RoundNumber, VecDeque<BlockReference>>, // maintain a map of round to block reference for inflation attack
 }
 
 pub struct CoreOptions {
     fsync: bool,
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum MetaStatement {
     Include(BlockReference),
     Payload(Vec<BaseStatement>),
@@ -164,6 +167,9 @@ impl<H: BlockHandler> Core<H> {
             (*committee).clone(),
             0,
         );
+        threshold_clock.set_attack_type(attack_type);
+        threshold_clock.set_adversary_authority(authority);
+
         tracing::info!(
             "Pipeline enabled: {}",
             public_config.parameters.enable_pipelining
@@ -202,6 +208,8 @@ impl<H: BlockHandler> Core<H> {
             acs_trigger_round,
             last_acs_start_time: Duration::from_secs(0),
             network_connections: Arc::new(RwLock::new(HashMap::new())),
+            attack_type,
+            round_blocks: HashMap::new(),
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -248,10 +256,19 @@ impl<H: BlockHandler> Core<H> {
                     }
                 })
                 .or_insert(*processed.reference());
+            let processed_round = processed.reference().round;
             self.threshold_clock
                 .add_block(*processed.reference(), &self.committee);
             self.pending
                 .push_back((position, MetaStatement::Include(*processed.reference())));
+            // Maintain a round_blocks map for
+            // 1) detecting if f+2 honest blocks are received in a round
+            // 2) todo: enable attacker to create blocks in 'every' round
+            // todo: need garbage collection
+            self.round_blocks
+                .entry(processed_round)
+                .or_insert_with(VecDeque::new)
+                .push_back(*processed.reference());
             result.push(processed);
         }
         self.run_block_handler(&result);
@@ -777,19 +794,47 @@ impl<H: BlockHandler> Core<H> {
 
         let mut includes = vec![];
         let mut statements = vec![];
+        let mut taken = VecDeque::new();
+        let recover_pending = self.pending.clone();
 
-        let first_include_index = self
-            .pending
-            .iter()
-            .position(|(_, statement)| match statement {
-                MetaStatement::Include(block_ref) => block_ref.round >= clock_round,
-                _ => false,
-            })
-            .unwrap_or(self.pending.len());
+        match self.attack_type {
+            AttackType::Inflation => {
+                // fix the logic of finding `includes`
+                let mut new_pending = VecDeque::new();
 
-        let mut taken = self.pending.split_off(first_include_index);
-        // Split off returns the "tail", what we want is keep the tail in "pending" and get the head
-        mem::swap(&mut taken, &mut self.pending);
+                for (wal_position, statement) in self.pending.drain(..) {
+                    match statement {
+                        MetaStatement::Include(block_ref) => {
+                            if block_ref.round < clock_round {
+                                taken.push_back((wal_position, MetaStatement::Include(block_ref)));
+                            } else {
+                                new_pending.push_back((wal_position, MetaStatement::Include(block_ref)));
+                            }
+                        }
+                        other => {
+                            new_pending.push_back((wal_position, other));
+                        }
+                    }
+                }
+
+                self.pending = new_pending;
+            }
+            _ => {
+                // for honest nodes, remain the same
+                let first_include_index = self
+                    .pending
+                    .iter()
+                    .position(|(_, statement)| match statement {
+                        MetaStatement::Include(block_ref) => block_ref.round >= clock_round,
+                        _ => false,
+                    })
+                    .unwrap_or(self.pending.len());
+                taken = self.pending.split_off(first_include_index);
+                // Split off returns the "tail", what we want is keep the tail in "pending" and get the head
+                mem::swap(&mut taken, &mut self.pending);
+            }
+        }
+        
         // Compress the references in the block
         // Iterate through all the include statements in the block, and make a set of all the references in their includes.
         let mut references_in_block: HashSet<BlockReference> = HashSet::new();
@@ -803,6 +848,7 @@ impl<H: BlockHandler> Core<H> {
             }
         }
         includes.push(*self.last_own_block.block.reference());
+
         for (_, statement) in taken.into_iter() {
             match statement {
                 MetaStatement::Include(include) => {
@@ -818,6 +864,50 @@ impl<H: BlockHandler> Core<H> {
             }
         }
 
+        // Inflation: remove the leader block (except for our own blocks) here
+        match self.attack_type {
+            AttackType::Inflation => {
+                // Find the leader block in the current round
+                let leaders = self.committer.get_leaders(clock_round);
+                if leaders.contains(&self.authority) {
+                    // If I am the leader, then I should not create a block
+                    self.pending = recover_pending;
+                    tracing::debug!("Inflation: not create leader block in {}", clock_round);
+                    return None;
+                }
+                // Find the leader blocks in the last round
+                let last_round_leaders = self.committer.get_leaders(clock_round - 1);
+                // Disconnect all leader blocks in the last round
+                includes.retain(|include| {
+                    !last_round_leaders.contains(&include.authority)
+                        || include.authority == self.authority
+                });
+                // Only propose valid blocks
+                if includes.len() < self.committee.quorum_threshold() as usize {
+                    // Recover the pending with the taken
+                    self.pending = recover_pending;
+                    tracing::debug!("Inflation: not enough includes {}", includes.len());
+                    return None;
+                }
+                // Inflation: create blocks only when receiving f+2 honest blocks in the round (since need to have 2f+2 blocks with one excluded block)
+                // todo: attackers should create blocks in 'every' round to make the attack effective
+                let round_blocks_len = self
+                    .round_blocks
+                    .get(&clock_round)
+                    .unwrap_or(&VecDeque::new())
+                    .len();
+                if round_blocks_len < self.committee.byzantine_threshold() as usize + 2 {
+                    self.pending = recover_pending;
+                    tracing::debug!(
+                        "Inflation: not enough blocks {} in the round {}",
+                        round_blocks_len,
+                        clock_round
+                    );
+                    return None;
+                }
+            }
+            _ => {}
+        }
         assert!(!includes.is_empty());
         let time_ns = timestamp_utc().as_nanos();
         let block = StatementBlock::new_with_signer(
@@ -829,6 +919,13 @@ impl<H: BlockHandler> Core<H> {
             self.epoch_changing(),
             &self.signer,
         );
+        // won't create invalid block, e.g., A3(A1, B2, C2), after launching inflation attack
+        if let Err(e) = block.verify(&self.committee) {
+            tracing::error!("Invalid block: {}", e);
+            tracing::debug!("Created block {block:?}");
+            self.pending = recover_pending;
+            return None;
+        }
         self.last_seen_blocks
             .entry(self.authority)
             .and_modify(|last_seen_block| {
@@ -873,6 +970,7 @@ impl<H: BlockHandler> Core<H> {
             self.wal_writer.sync().expect("Wal sync failed");
         }
 
+        // self.threshold_clock.propose_at_round(block.round());
         tracing::debug!("Created block {block:?}");
 
         // ACS test: this is for acs test only:
@@ -1093,6 +1191,10 @@ impl<H: BlockHandler> Core<H> {
 
     pub fn epoch_closing_time(&self) -> Arc<AtomicU64> {
         self.epoch_manager.closing_time()
+    }
+
+    pub fn attack_type(&self) -> AttackType {
+        self.attack_type
     }
 
     pub fn consensus_mode(&self) -> ConsensusMode {
