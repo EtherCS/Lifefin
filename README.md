@@ -12,7 +12,7 @@ This software is licensed as [Apache 2.0](LICENSE).
 ## Mysticeti ACS protocol
 [Paper] *Mysticeti: Reaching the Limits of Latency with Uncertified DAGs* [[link](https://arxiv.org/abs/2310.14821)]
 
-*Attack evaluation:* see this [branch](https://github.com/EtherCS/dagACS/tree/DAG-inflation-v2).
+*Attack evaluation:* see this [branch](https://github.com/EtherCS/dagACS/tree/mysticeti-resist-eval).
 
 *Implementation:* see this [branch](https://github.com/EtherCS/dagACS/tree/dev-ACS-mysticeti).
 
