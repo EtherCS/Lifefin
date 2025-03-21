@@ -15,7 +15,7 @@ def inflation(ctx):
     f = 3
     committee_size = 3*f + 1
     bench_params = {
-        'rate': 1_000,
+        'rate': 50_000,
         'tx_size': 512,
         'delay': 0,
     }
@@ -64,7 +64,7 @@ def resist(ctx):
     f = 3
     committee_size = 3*f + 1
     bench_params = {
-        'rate': 1_000,
+        'rate': 50_000,
         'tx_size': 512,
         'delay': 0,
     }
