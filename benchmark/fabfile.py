@@ -208,7 +208,7 @@ def attackplot(ctx, output_path='sf-inflation.pdf'):
         'faults': 0,
         "burst": 5
     }
-    plot_interval = 3 # second
+    plot_interval = 5 # second
     try:
         plotter = InflationPlotter(burst=bench_params['burst'], faults=bench_params['faults'])
         plotter.plot(output_path=output_path, plot_interval=plot_interval)
