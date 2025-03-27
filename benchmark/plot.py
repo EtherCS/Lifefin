@@ -84,6 +84,10 @@ class Plotter:
         ax1.set_ylim(0.0, 1e8)
         ax2.set_ylim(0.0, 1.5e9)
         
+        # Set y-axis ticks for ax2 with an interval of 3e8
+        y_ticks = [i * 3e8 for i in range(0, 6)]  # Generate ticks: 0, 3e8, 6e8, ..., 1.5e9
+        ax2.set_yticks(y_ticks)
+        
         # Legends
         ax1_lines, ax1_labels = ax1.get_legend_handles_labels()
         ax2_lines, ax2_labels = ax2.get_legend_handles_labels()
