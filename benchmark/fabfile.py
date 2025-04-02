@@ -176,7 +176,7 @@ def inflation(ctx, fallback_round=0, debug=True):
         'faults': 0,
         'nodes': 3*f+1,
         'workers': 1,
-        'rate': 3_00,
+        'rate': 2_50,
         'tx_size': 512,
         'duration': 100,
         "burst": 5

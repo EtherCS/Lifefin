@@ -151,3 +151,5 @@ db_*
 **/target/
 
 data
+
+*.pdf
