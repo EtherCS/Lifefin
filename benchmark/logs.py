@@ -149,7 +149,7 @@ class Parser:
 
 
     def get_metrics_data(self):
-
+        plot_interval = 3
         # Calculate the bytes per second for the committed blocks (commits)
         committed_blocks_by_second = self.get_committed_blocks_by_seconds(self.start_time, self.end_time)
         bytes_of_commits_by_second = []
@@ -158,6 +158,10 @@ class Parser:
         last_culmulative_total_commit_bytes = 0
         culmulative_total_commit_bytes = 0
         for second, commits in committed_blocks_by_second:
+            # plot 0 within the interval with no commits
+            if second - previous_second > plot_interval:
+                for intverval in range(math.ceil(previous_second) + plot_interval, math.ceil(second), plot_interval):
+                    bytes_of_commits_by_second.append((intverval, 0, 0, culmulative_total_commit_bytes))
             total_bytes = sum([self.blocks[node].get_size() for node in commits])
             if total_bytes == 0:
                 continue
