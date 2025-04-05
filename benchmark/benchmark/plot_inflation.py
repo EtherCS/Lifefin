@@ -118,7 +118,7 @@ class InflationPlotter:
         # plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
         sns.set_theme(style="whitegrid")
-        fig, ax1 = plt.subplots(figsize=(16, 9))
+        fig, ax1 = plt.subplots(figsize=(9, 9))
 
         # Left Y-axis (Bytes Per Second - BPS)
         ax1.plot(commits_df['second'].to_numpy(), commits_df['bps'].to_numpy(), label='Committed BPS', color='red', marker='v', markersize=10, linewidth=4)
@@ -148,7 +148,7 @@ class InflationPlotter:
         # Set x-axis ticks with an interval of 20
         x_ticks = range(0, int(commits_df['second'].max())+5, 20)
         ax1.set_xticks(x_ticks)
-        ax1.set_xlim(0, 100+5)
+        ax1.set_xlim(0, 100)
         
         # Increase the size of scientific notation text (offset text)
         ax1.yaxis.get_offset_text().set_fontsize(32)
