@@ -60,7 +60,7 @@ class Plotter:
         ax1.tick_params(axis='x', labelsize=36)
         
         # Set x-axis ticks with an interval of 20
-        x_ticks = range(0, int(commits_df['second'].max())+5, 20)
+        x_ticks = range(0, int(commits_df['second'].max()), 20)
         ax1.set_xticks(x_ticks)
         # ax1.set_xlim(0, 80)
         
