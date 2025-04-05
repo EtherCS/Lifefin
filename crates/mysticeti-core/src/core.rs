@@ -315,6 +315,9 @@ impl<H: BlockHandler> Core<H> {
                     self.threshold_clock.get_round()
                 );
                 tracing::debug!("Broadcasting own post block {:?}", new_post_block);
+
+                // handle our own post block
+                self.add_post_blocks(vec![new_post_block.clone()]);
                 // this is our post block
                 rt.block_on(
                     self.broadcast(NetworkMessage::ProofOfStuckBlock(new_post_block.clone())),
