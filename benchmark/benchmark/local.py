@@ -142,9 +142,10 @@ The workflow is the same as the local benchmark, but it kills one honest node af
 class LocalInflationBench(LocalBench):
     BASE_PORT = 13000
 
-    def __init__(self, bench_parameters_dict, node_parameters_dict, crash_time=None):
+    def __init__(self, bench_parameters_dict, node_parameters_dict, crash_time=None, recover_time=None):
         super().__init__(bench_parameters_dict, node_parameters_dict)
         self.crash_time = crash_time
+        self.recover_time = recover_time
 
     def __getattr__(self, attr):
         return getattr(self.bench_parameters, attr)
@@ -223,8 +224,8 @@ class LocalInflationBench(LocalBench):
                 )
                 log_file = PathMaker.primary_log_file(i)
                 self._background_run(cmd, log_file)
-                if node_type == 0:
-                    honest_nodes_primaries[i] = splitext(basename(log_file))[0]
+                # if node_type == 0:
+                honest_nodes_primaries[i] = splitext(basename(log_file))[0]
 
             # Run the workers (except the faulty ones).
             honest_nodes_workers = {}
@@ -242,8 +243,8 @@ class LocalInflationBench(LocalBench):
                     )
                     log_file = PathMaker.worker_log_file(i, id)
                     self._background_run(cmd, log_file)
-                    if node_type == 0:
-                        honest_nodes_workers[(i, id)] = splitext(basename(log_file))[0]
+                    # if node_type == 0:
+                    honest_nodes_workers[(i, id)] = splitext(basename(log_file))[0]
 
             # Wait for all transactions to be processed.
             curr_timestamp = datetime.datetime.now()
@@ -251,7 +252,7 @@ class LocalInflationBench(LocalBench):
             # Wait for the crash time to kill one honest node.
             if self.crash_time is None:
                 self.crash_time = ceil(self.duration / 2)
-            rest_duration = self.duration - self.crash_time
+            
             curr_timestamp = datetime.datetime.now()
             Print.info(f'{curr_timestamp}: Waiting for {self.crash_time} seconds to kill one honest node...',)
             sleep(self.crash_time)
@@ -264,8 +265,23 @@ class LocalInflationBench(LocalBench):
                     continue
                 name = honest_nodes_workers[(i, id)]
                 self._kill_session(name)
+                
+            # recover
+            curr_timestamp = datetime.datetime.now()
+            Print.info(f'{curr_timestamp}: Waiting for {self.recover_time} seconds to recover one honest node...',)
+            sleep(self.recover_time)
+            # kill attackers
+            # for index in [nodes-1, nodes-2]:
+            #     name = honest_nodes_primaries[index]
+            #     self._kill_session(name)
+            #     for i, id in honest_nodes_workers.keys():
+            #         if i != index:
+            #             continue
+            #         name = honest_nodes_workers[(i, id)]
+            #         self._kill_session(name)
             
             # Wait for the rest of the benchmark.
+            rest_duration = self.duration - self.crash_time - self.recover_time
             curr_timestamp = datetime.datetime.now()
             Print.info(f'{curr_timestamp}: One honest node killed. Waiting for {rest_duration} seconds to finish the benchmark...')
             sleep(rest_duration)

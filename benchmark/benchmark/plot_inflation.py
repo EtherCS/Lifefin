@@ -146,9 +146,9 @@ class InflationPlotter:
         ax1.tick_params(axis='x', labelsize=36)
         
         # Set x-axis ticks with an interval of 20
-        x_ticks = range(0, 80+5, 20)
+        x_ticks = range(0, int(commits_df['second'].max())+5, 20)
         ax1.set_xticks(x_ticks)
-        ax1.set_xlim(0, 80)
+        ax1.set_xlim(0, 100+5)
         
         # Increase the size of scientific notation text (offset text)
         ax1.yaxis.get_offset_text().set_fontsize(32)

@@ -390,14 +390,24 @@ impl Core {
             }
         }
 
-        // For testing (the attack resistance) only, we only attack until the fallback is triggered
+        // For testing (the attack resistance) only
+        // Since we kill one hoenst node, we assume attackers are the recovery correct nodes
         if header.round == self.fallback_round {
-            debug!("Attacker node stops attacking");
-            self.node_type = NodeType::Honest;
-            self.tx_attack_switch
-                .send(NodeType::Honest)
-                .await
-                .expect("Failed to send attack switch");
+            match self.node_type {
+                NodeType::Honest => (),
+                NodeType::Attacker => {
+                    debug!("ACS trigger round reached, switch to correct nodes");
+                    self.node_type = NodeType::Honest;
+                    self.tx_attack_switch
+                        .send(NodeType::Honest)
+                        .await
+                        .expect("Failed to send attack switch");
+                    // unsafe {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+                    // }
+                    debug!("ACS trigger round reached, correct node alives");
+                }
+            }
         }
 
         if header.round == self.fallback_round

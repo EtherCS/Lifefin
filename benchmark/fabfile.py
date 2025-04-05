@@ -171,6 +171,7 @@ def inflation(ctx, fallback_round=0, debug=True):
     ''' Run benchmarks on localhost '''
     f = 3 # number of malicious nodes
     crash_time = 20 # time (s) to crash an honest node
+    recover_time = 20 # time to recover the honest node after the crash
 
     bench_params = {
         'faults': 0,
@@ -178,7 +179,7 @@ def inflation(ctx, fallback_round=0, debug=True):
         'workers': 1,
         'rate': 2_50,
         'tx_size': 512,
-        'duration': 100,
+        'duration': 120,
         "burst": 5
     }
     node_params = {
@@ -194,7 +195,7 @@ def inflation(ctx, fallback_round=0, debug=True):
         'node_types': [0]*(2*f+1) + [2]*f  # 2*f+1 honest, f attacker
     }
     try:
-        ret = LocalInflationBench(bench_params, node_params, crash_time).run(debug)
+        ret = LocalInflationBench(bench_params, node_params, crash_time, recover_time).run(debug)
         print(ret.result())
     except BenchError as e:
         Print.error(e)
