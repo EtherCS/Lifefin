@@ -10,6 +10,7 @@ use std::{
 
 use acs::{acs_types::ConsensusMode, adversary::AttackType};
 
+use libc::sleep;
 use minibytes::Bytes;
 
 use crate::{
@@ -242,12 +243,17 @@ impl<H: BlockHandler> Core<H> {
             .utilization_timer
             .utilization_timer("Core::add_blocks");
         // For attack resistance test only
-        // Since we kill one hoenst node, to trigger fallback, we choose to stop attack
+        // Since we kill one hoenst node, we assume attackers are the recovery correct nodes
         for block in &blocks {
             if block.round() == self.acs_trigger_round {
-                tracing::info!("ACS trigger round reached, stopping attack");
+                tracing::info!("ACS trigger round reached, switch to correct nodes");
                 self.attack_type = AttackType::Honest;
                 self.threshold_clock.set_attack_type(AttackType::Honest);
+                // for test only, we assume the crash node become alive after the fallback is triggered
+                unsafe {
+                    sleep(20);
+                }
+                tracing::info!("ACS trigger round reached, correct node alives");
             }
         }
         let processed = self
@@ -341,6 +347,8 @@ impl<H: BlockHandler> Core<H> {
                     self.threshold_clock.get_round()
                 );
                 tracing::debug!("Broadcasting own post block {:?}", new_post_block);
+                // handle our own post block
+                self.add_post_blocks(vec![new_post_block.clone()]);
                 // this is our post block
                 rt.block_on(
                     self.broadcast(NetworkMessage::ProofOfStuckBlock(new_post_block.clone())),

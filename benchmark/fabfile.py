@@ -71,6 +71,7 @@ def resist(ctx):
 
     total_time = 100 # total time to run the benchmark
     crash_time = 20 # time to crash the honest node
+    correct_recovery_time = 20 # time to recover the honest node after the crash
     
     stuck_round = 80 # round to trigger fallback
 
@@ -104,9 +105,14 @@ def resist(ctx):
 
     # kill the last node
     print("Crashing the last node (honest node)")
-    ctx.run(f"tmux send-keys -t {tmux_id}{3*f-1}:0 C-c") # crash the last node (honest node)
+    ctx.run(f"tmux send-keys -t {tmux_id}{3*f}:0 C-c") # crash the last node (honest node)
+    
+    print(f"Correct node recovers at {crash_time+correct_recovery_time} seconds")
+    time.sleep(correct_recovery_time) # wait for the recovery time
+    ctx.run(f"tmux send-keys -t {tmux_id}{1}:0 C-c")
+    ctx.run(f"tmux send-keys -t {tmux_id}{2}:0 C-c")
 
-    time.sleep(total_time - crash_time) # wait for the rest of the time
+    time.sleep(total_time - crash_time - correct_recovery_time) # wait for the rest of the time
     ctx.run("tmux kill-server") 
     
 @task

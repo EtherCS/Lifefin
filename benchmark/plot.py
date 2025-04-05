@@ -62,7 +62,7 @@ class Plotter:
         # Set x-axis ticks with an interval of 20
         x_ticks = range(0, int(commits_df['second'].max())+5, 20)
         ax1.set_xticks(x_ticks)
-        ax1.set_xlim(0, 80)
+        # ax1.set_xlim(0, 80)
         
         # Increase the size of scientific notation text (offset text)
         ax1.yaxis.get_offset_text().set_fontsize(32)
@@ -83,7 +83,7 @@ class Plotter:
             
         # Set fixed y-axis limits for zooming in
         ax1.set_ylim(0.0, 2e8)
-        ax2.set_ylim(0.0, 4e8)
+        ax2.set_ylim(0.0, 1e9)
         
         # Set y-axis ticks for ax2 with an interval of 3e8
         # y_ticks = [i * 3e8 for i in range(0, 6)]  # Generate ticks: 0, 3e8, 6e8, ..., 1.5e9
