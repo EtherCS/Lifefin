@@ -41,8 +41,8 @@ impl Default for SynchronizerParameters {
             absolute_maximum_helpers: 10,
             maximum_helpers_per_authority: 2,
             batch_size: 10,
-            sample_precision: Duration::from_secs(5),
-            grace_period: Duration::from_secs(5),
+            sample_precision: Duration::from_secs(2),
+            grace_period: Duration::from_secs(2),
             stream_interval: Duration::from_secs(1),
             new_stream_threshold: 10,
         }
@@ -335,16 +335,24 @@ where
         // to (temporarily) sync the blocks from that authority.
 
         for chunks in to_request.chunks(net_sync::MAXIMUM_BLOCK_REQUEST) {
-            let Some((peer, permit)) = self.sample_peer(&[self.id]) else {
-                break;
-            };
-            let message = NetworkMessage::RequestBlocks(chunks.to_vec());
-            permit.send(message);
+            // let Some((peer, permit)) = self.sample_peer(&[self.id]) else {
+            //     break;
+            // };
+            // let message = NetworkMessage::RequestBlocks(chunks.to_vec());
+            // permit.send(message);
 
-            self.metrics
-                .block_sync_requests_sent
-                .with_label_values(&[&peer.to_string()])
-                .inc();
+            // We optimize pull protocol by requesting blocks from all peers.
+            for (peer, sender) in self.senders.iter() {
+                let message = NetworkMessage::RequestBlocks(chunks.to_vec());
+                if let Err(_) = sender.try_send(message) {
+                    tracing::warn!("Failed to send block request to peer {}", peer);
+                }
+
+                self.metrics
+                    .block_sync_requests_sent
+                    .with_label_values(&[&peer.to_string()])
+                    .inc();
+            }
         }
     }
 

@@ -1111,7 +1111,9 @@ impl<H: BlockHandler> Core<H> {
     pub async fn broadcast(&self, message: NetworkMessage) {
         let connections = self.network_connections.read().unwrap();
         for (_, c) in connections.iter() {
-            let _ = c.send(message.clone()).await;
+            if let Err(_) = c.try_send(message.clone()) {
+                tracing::warn!("Failed to broadcast message to peers");
+            }
         }
     }
 
@@ -1119,7 +1121,9 @@ impl<H: BlockHandler> Core<H> {
     pub async fn send_peer(&self, peer: AuthorityIndex, message: NetworkMessage) {
         let connections = self.network_connections.read().unwrap();
         if let Some(c) = connections.get(&peer) {
-            let _ = c.send(message).await;
+            if let Err(_) = c.try_send(message) {
+                tracing::warn!("Failed to send message to peer {}", peer);
+            }
         }
     }
 }
