@@ -21,6 +21,8 @@ pub type ABARoundNumber = u64;
 pub type BinaryValue = u64; // b=0, b=1, b=2 (None)
 pub type MVBA = u128;
 
+pub const NOT_DECIDED_IN_ABA_ROUND: u128 = 1000;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PisaABAMessage {
     PisaABABval(PisaABABval),
@@ -1034,6 +1036,9 @@ impl ACSFin {
                         // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
                         return Some(0);
                     }
+                } else {
+                    // we cannot decide in the current aba round, enter the next aba round
+                    return Some(NOT_DECIDED_IN_ABA_ROUND);
                 }
             } else {
                 if let Some(decided_authority) = self.try_decide() {
@@ -1048,6 +1053,9 @@ impl ACSFin {
                         // we use 0 to represent the status: we can decide but haven't received the mvba from the decided authority
                         return Some(0);
                     }
+                } else {
+                    // we cannot decide in the current aba round, enter the next aba round
+                    return Some(NOT_DECIDED_IN_ABA_ROUND);
                 }
             }
         }
@@ -1088,7 +1096,8 @@ impl ACSFin {
                 self.mvba_view.clone().mvba_round,
                 self.mvba_view.clone().aba_round + 1,
             );
-            self.new_fin_view(new_view, next_est, next_maj);
+            self.new_fin_view(new_view.clone(), next_est, next_maj);
+            self.reset_to_new_fin_view(new_view);
             return None;
         }
     }
@@ -1177,7 +1186,8 @@ impl ACSFin {
                 self.mvba_view.clone().mvba_round,
                 self.mvba_view.clone().aba_round + 1,
             );
-            self.new_fin_view(new_view, next_est, next_maj);
+            self.new_fin_view(new_view.clone(), next_est, next_maj);
+            self.reset_to_new_fin_view(new_view);
             return None;
         }
     }
@@ -1399,6 +1409,15 @@ impl ACSFin {
             return_avals.push(aux.aux2);
         }
         return_avals
+    }
+
+    pub fn reset_to_new_fin_view(&mut self, new_view: FINMVBAView) {
+        tracing::debug!("Reset the ACSFin to new ABA round {:?}", new_view);
+        self.current_bval = 0;
+        self.current_maj = 2;
+        self.mvba_view = new_view;
+        self.raba_bvals.clear();
+        self.raba_aux.clear();
     }
 
     pub fn reset(&mut self, latest_commit_round: RoundNumber) {
