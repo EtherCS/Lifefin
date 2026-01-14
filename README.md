@@ -14,7 +14,7 @@ This software is licensed as [Apache 2.0](LICENSE).
 
 *Attack evaluation:* see this [branch](https://github.com/EtherCS/dagACS/tree/mysticeti-resist-eval).
 
-*Implementation:* see this [branch](https://github.com/EtherCS/dagACS/tree/dev-ACS-mysticeti).
+*Implementation:* see this [branch](https://github.com/EtherCS/dagACS/tree/ACS-mysticeti).
 
 
 
