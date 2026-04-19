@@ -65,5 +65,5 @@ By default, it will run **10** nodes for **60** seconds, where nodes will be stu
 -----------------------------------------
 ```
 
-## Evaluation and Reproducing Paper Results:
+## Evaluation and Reproducing Paper Results
 Please refer to the README.md at ```./benchmark```
