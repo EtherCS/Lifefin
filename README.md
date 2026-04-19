@@ -9,7 +9,7 @@
 
 This software is licensed as [Apache 2.0](LICENSE).
 
-## Quick Start in a single machine
+## Quick Start
 ```bash
 cd scripts
 bash acsdryrun.sh 4 1 500 60
@@ -23,5 +23,5 @@ This command runs **4** nodes (**1** of which are crashed) for **60** seconds, w
 ...
 ```
 
-## Observations
-**Performance degradation:** While recovering to optmistic mode from ACS mode, nodes may experience a *hangover* period, leading to the performance degradation. Specifically, some nodes need to synchronize the missing blocks included by the ACS output and cannot catch up the latest round. The other nodes therefore have to either be stuck (if *>f* nodes need to sync) or wait for a leader timeout (if *<=f* nodes need to sync) to move to next rounds.
+## Evaluation and Reproducing Paper Results
+Please refer to the README.md at ```./crates/orchestrator```
