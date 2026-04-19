@@ -9,9 +9,21 @@
 
 This software is licensed as [Apache 2.0](LICENSE).
 
-## Quick Evaluation in a local machine
+## Quick Start
+
+The core protocols are written in Rust, but all benchmarking scripts are written in Python and run with [Fabric](http://www.fabfile.org/).
+
+To deploy and benchmark a testbed of 4 nodes on your local machine, clone the repo and install the python dependencies:
+
+```
+$ git clone THIS_REPO
+$ cd THIS_REPO/benchmark
+$ pip install -r requirements.txt
+```
+
+You also need to install Clang (required by rocksdb) and [tmux](https://linuxize.com/post/getting-started-with-tmux/#installing-tmux) (which runs all nodes and clients in the background). Finally, run a local benchmark using fabric:
+
 ```bash
-cd benchmark
 fab local
 ```
 By default, it will run **10** nodes for **60** seconds, where nodes will be stuck (i.e., entering the fallback consensus mode) in round **10**. After finishing the execution, the terminal will output:
@@ -52,3 +64,6 @@ By default, it will run **10** nodes for **60** seconds, where nodes will be stu
  ACS data size: 145,681 B
 -----------------------------------------
 ```
+
+## Evaluation and Reproducing Paper Results:
+Please refer to the README.md at ```./benchmark```
